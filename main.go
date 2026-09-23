@@ -17,7 +17,7 @@ type AddRequest struct {
 	Val string `json:"val"`
 }
 
-type GetRequest struct {
+type NonAddRequest struct {
 	Key string `json:"key"`
 }
 
@@ -43,7 +43,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
-	var req GetRequest
+	var req NonAddRequest
 	var nf *kvstore.NotFoundError
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -58,8 +58,21 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusFound)
-	json.NewEncoder(w).Encode(map[string]string{ v: v})
+	json.NewEncoder(w).Encode(map[string]string{ req.Key: v})
+}
+
+func ( s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	var req NonAddRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.kv.Del(req.Key)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{ "msg": "Key successfully deleted" })
 }
 
 func main() {
@@ -70,6 +83,7 @@ func main() {
 
 	mux.HandleFunc("POST /put", srv.add)
 	mux.HandleFunc("GET /get", srv.get)
+	mux.HandleFunc("DELETE /del", srv.delete)
 
 	fmt.Println("Server starting on http://localhost:8080")
 

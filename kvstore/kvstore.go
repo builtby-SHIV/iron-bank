@@ -37,3 +37,9 @@ func (kv *KVStore) Get(k string) (string, error) {
 	}
 	return v, nil
 }
+
+func (kv *KVStore) Del(k string) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	delete(kv.data, k)
+}

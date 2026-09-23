@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iron-bank/kvstore"
 	"net/http"
@@ -11,20 +12,28 @@ type Response struct {
 	Message string `json:"message"`
 }
 
-type Request struct {
+type AddRequest struct {
 	Key string `json:"key"`
 	Val string `json:"val"`
 }
 
-func add(w http.ResponseWriter, r *http.Request) {
-	var req Request
+type GetRequest struct {
+	Key string `json:"key"`
+}
+
+type Server struct {
+	kv *kvstore.KVStore
+}
+
+func (s *Server) add(w http.ResponseWriter, r *http.Request) {
+	var req AddRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	kv.Set(req.Key, req.Val)
+	s.kv.Set(req.Key, req.Val)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -33,11 +42,34 @@ func add(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) get(w http.ResponseWriter, r *http.Request) {
+	var req GetRequest
+	var nf *kvstore.NotFoundError
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	v, err := s.kv.Get(req.Key)
+
+	if errors.As(err, &nf) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusFound)
+	json.NewEncoder(w).Encode({ v: v})
+}
+
 func main() {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /put", add)
-	mux.HandleFunc("GET /get", get)
+	kv := kvstore.NewKVStore()
+	srv := &Server{ kv:kv }
+
+	mux.HandleFunc("POST /put", srv.add)
+	mux.HandleFunc("GET /get", srv.get)
 
 	fmt.Println("Server starting on http://localhost:8080")
 

@@ -59,7 +59,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusFound)
-	json.NewEncoder(w).Encode({ v: v})
+	json.NewEncoder(w).Encode(map[string]string{ v: v})
 }
 
 func main() {

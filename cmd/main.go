@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iron-bank/kvstore"
+	"iron-bank/internals/kvstore"
+	"iron-bank/internals/wal"
+	"log"
 	"net/http"
 )
 
@@ -23,6 +25,7 @@ type NonAddRequest struct {
 
 type Server struct {
 	kv *kvstore.KVStore
+	wal *wal.WAL
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +36,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.wal.WriteToWal(req.Key, req.Val)
 	s.kv.Set(req.Key, req.Val)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -61,7 +65,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{ req.Key: v})
 }
 
-func ( s *Server) delete(w http.ResponseWriter, r *http.Request) {
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	var req NonAddRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -79,7 +83,12 @@ func main() {
 	mux := http.NewServeMux()
 
 	kv := kvstore.NewKVStore()
-	srv := &Server{ kv:kv }
+	wal, err := wal.StartLogger()
+	if err != nil {
+		log.Fatal(err.Error())
+		return
+	}
+	srv := &Server{ kv:kv, wal: wal }
 
 	mux.HandleFunc("POST /put", srv.add)
 	mux.HandleFunc("GET /get", srv.get)

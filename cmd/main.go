@@ -36,7 +36,10 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.wal.WriteToWal(req.Key, req.Val)
+	if err := s.wal.WriteToWal(req.Key, req.Val); err != nil {
+		log.Fatal(err.Error())
+		return
+	}
 	s.kv.Set(req.Key, req.Val)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -81,9 +84,15 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	mux := http.NewServeMux()
-
 	kv := kvstore.NewKVStore()
+
 	wal, err := wal.StartLogger()
+	if err != nil {
+		log.Fatal(err.Error())
+		return
+	}
+
+	err = wal.ReplayLog(kv)
 	if err != nil {
 		log.Fatal(err.Error())
 		return

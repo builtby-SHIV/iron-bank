@@ -2,6 +2,8 @@ package wal
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"iron-bank/internals/kvstore"
 	"log"
@@ -13,11 +15,13 @@ import (
 type WAL struct {
 	logger *log.Logger
 	file *os.File
-	mu sync.RWMutex
+	mu sync.Mutex
 }
 
-var ErrOpenAndCreateWAL = errors.New("cannot open or create log file")
-var FileNotFound = errors.New("log file not found")
+var( 
+	ErrOpenAndCreateWAL = errors.New("cannot open or create log file")
+	FileNotFound = errors.New("log file not found")
+)
 
 func StartLogger() (*WAL, error) {
 	f, err := os.OpenFile("WAL.log", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
@@ -32,7 +36,9 @@ func (w *WAL) WriteToWal(k, v string) error{
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.logger.Println(k, v)
+	h := sha256.Sum256([]byte(k + v))
+	hash := hex.EncodeToString(h[:])
+	w.logger.Println(k, v, hash)
 	if err := w.file.Sync(); err != nil {
 		return err
 	}
@@ -49,6 +55,9 @@ func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		res := strings.Split(scanner.Text(), " ")
+		if hash := sha256.Sum256([]byte(res[1] + res[2])); hex.EncodeToString(hash[:]) != strings.Join(res[3:], " ") {
+			return nil
+		}
 		kv.Set(res[1], res[2])
 	}
 

@@ -36,7 +36,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.wal.WriteToWal(req.Key, req.Val); err != nil {
+	if err := s.wal.WriteToWal([]byte(req.Key), []byte(req.Val), 1); err != nil {
 		log.Fatal(err.Error())
 		return
 	}

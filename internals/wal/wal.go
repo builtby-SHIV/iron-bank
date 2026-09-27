@@ -1,26 +1,32 @@
 package wal
 
 import (
-	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/binary"
 	"errors"
+	"io"
+	"hash/crc32"
 	"iron-bank/internals/kvstore"
-	"log"
 	"os"
-	"strings"
 	"sync"
 )
 
 type WAL struct {
-	logger *log.Logger
+	buf [] byte
 	file *os.File
 	mu sync.Mutex
+	lastseqnum int
+	maxfilesize int
 }
 
-var( 
+var ( 
 	ErrOpenAndCreateWAL = errors.New("cannot open or create log file")
 	FileNotFound = errors.New("log file not found")
+)
+
+const (
+	OpSet byte = 1
+	OpDel byte = 2
+	Header = 21
 )
 
 func StartLogger() (*WAL, error) {
@@ -28,20 +34,36 @@ func StartLogger() (*WAL, error) {
 	if err != nil {
 		return nil, ErrOpenAndCreateWAL
 	}
-	logger := log.New(f, "", log.Ltime)
-	return &WAL{ logger: logger, file: f }, nil
+	return &WAL{ file: f, buf: make([]byte, 1024) }, nil
 }
 
-func (w *WAL) WriteToWal(k, v string) error{
+func (w *WAL) WriteToWal(key, val []byte, op byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	h := sha256.Sum256([]byte(k + v))
-	hash := hex.EncodeToString(h[:])
-	w.logger.Println(k, v, hash)
-	if err := w.file.Sync(); err != nil {
+	keyLen := len(key)
+	valLen := len(val)
+
+	totalSize := Header + int(keyLen) + int(valLen)
+	if totalSize > cap(w.buf) {
+		w.buf = make([]byte, totalSize)
+	} else {
+		w.buf = w.buf[:totalSize]
+	}
+
+	w.buf[4] = op
+	binary.BigEndian.PutUint64(w.buf[5:13], uint64(keyLen))
+	binary.BigEndian.PutUint64(w.buf[13:21], uint64(valLen))
+	copy(w.buf[21:21+keyLen], key)
+	copy(w.buf[21+keyLen:], val)
+
+	checksum := crc32.ChecksumIEEE(w.buf[4:])
+	binary.BigEndian.PutUint32(w.buf[0:4], checksum)
+
+	if _, err := w.file.Write(w.buf); err != nil {
 		return err
 	}
+	w.file.Sync()
 	return nil
 }
 
@@ -52,18 +74,45 @@ func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		res := strings.Split(scanner.Text(), " ")
-		if hash := sha256.Sum256([]byte(res[1] + res[2])); hex.EncodeToString(hash[:]) != strings.Join(res[3:], " ") {
+	for  {
+		buf := make([]byte, 21)
+		_, err := io.ReadFull(file, buf)
+		if err == io.EOF {
 			return nil
 		}
-		kv.Set(res[1], res[2])
-	}
+		if err != nil {
+			return err
+		}
 
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
+		checksum := binary.BigEndian.Uint32(buf[0:4])
 
-	return nil
+		crc := crc32.NewIEEE()
+		crc.Write(buf[4:21])
+
+		op := buf[4]
+		key_len := binary.BigEndian.Uint64(buf[5:13])
+		val_len :=binary.BigEndian.Uint64(buf[13:21])
+		buf = make([]byte, key_len)
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return err
+		}
+		key := buf
+		crc.Write(key)
+		buf = make([]byte, val_len)
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return err
+		}
+		val := buf
+		crc.Write(val)
+
+		if checksum != crc.Sum32() {
+			//apply corrupt WAL
+		} else {
+			if op == 1 {
+				kv.Set(string(key), string(val))
+			} else {
+				kv.Del(string(key))
+			}
+		}
+	}
 }

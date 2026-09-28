@@ -3,8 +3,9 @@ package wal
 import (
 	"encoding/binary"
 	"errors"
-	"io"
+	"fmt"
 	"hash/crc32"
+	"io"
 	"iron-bank/internals/kvstore"
 	"os"
 	"sync"
@@ -14,6 +15,7 @@ type WAL struct {
 	buf [] byte
 	file *os.File
 	mu sync.Mutex
+	offset int64
 	lastseqnum int
 	maxfilesize int
 }
@@ -37,10 +39,9 @@ func StartLogger() (*WAL, error) {
 	return &WAL{ file: f, buf: make([]byte, 1024) }, nil
 }
 
-func (w *WAL) WriteToWal(key, val []byte, op byte) error {
+func (w *WAL) WriteToWal(op byte, kv *kvstore.KVStore, key, val []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	keyLen := len(key)
 	valLen := len(val)
 
@@ -68,19 +69,23 @@ func (w *WAL) WriteToWal(key, val []byte, op byte) error {
 }
 
 func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
-	file, err := os.Open("WAL.log")
+	st, err := w.file.Stat()
 	if err != nil {
-		return FileNotFound
+		return err
 	}
-	defer file.Close()
-
-	for  {
+	size := st.Size()
+	var off int64
+	for off < size {
+		if size - off < Header {
+			break
+		}
 		buf := make([]byte, 21)
-		_, err := io.ReadFull(file, buf)
+		_, err := w.file.ReadAt(buf, off)
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
+			fmt.Println("no error is from here")
 			return err
 		}
 
@@ -91,22 +96,20 @@ func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
 
 		op := buf[4]
 		key_len := binary.BigEndian.Uint64(buf[5:13])
-		val_len :=binary.BigEndian.Uint64(buf[13:21])
-		buf = make([]byte, key_len)
-		if _, err := io.ReadFull(file, buf); err != nil {
+		val_len := binary.BigEndian.Uint64(buf[13:21])
+		buf = make([]byte, key_len + val_len)
+		if _, err := w.file.ReadAt(buf, off + Header); err != nil {
 			return err
 		}
-		key := buf
-		crc.Write(key)
-		buf = make([]byte, val_len)
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return err
-		}
-		val := buf
-		crc.Write(val)
+		crc.Write(buf)
+		key, val := buf[:key_len], buf[key_len:]
 
+		recEnd := off + Header + int64(key_len + val_len)
 		if checksum != crc.Sum32() {
-			//apply corrupt WAL
+			if recEnd < size {
+				return fmt.Errorf("corrupt record at offset %d, %d bytes follow", off, size-recEnd)
+			}
+			break
 		} else {
 			if op == 1 {
 				kv.Set(string(key), string(val))
@@ -114,5 +117,15 @@ func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
 				kv.Del(string(key))
 			}
 		}
+		off = recEnd
 	}
+
+	if off < size {
+		if err = w.file.Truncate(off); err != nil { return err }
+		if err = w.file.Sync(); err != nil { return err }
+	}
+
+	w.offset = off
+
+	return nil
 }

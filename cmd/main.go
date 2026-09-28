@@ -36,7 +36,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.wal.WriteToWal([]byte(req.Key), []byte(req.Val), 1); err != nil {
+	if err := s.wal.WriteToWal(1, s.kv, []byte(req.Key), []byte(req.Val)); err != nil {
 		log.Fatal(err.Error())
 		return
 	}
@@ -76,6 +76,10 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.wal.WriteToWal(2, s.kv, []byte(req.Key), []byte("")); err != nil {
+		log.Fatal(err.Error())
+		return
+	}
 	s.kv.Del(req.Key)
 
 	w.Header().Set("Content-Type", "application/json")

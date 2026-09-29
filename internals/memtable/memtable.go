@@ -48,3 +48,17 @@ func (m *Memtable) Get(key string) *LSMEntry {
 	}
 	return nil
 }
+
+func (m *Memtable) RangeScan(start, end string) [] *LSMEntry {
+	var results [] *LSMEntry
+	iter := m.data.Find(start)
+	for iter != nil {
+		if iter.Element().Key().(string) > end {
+			break
+		}
+
+		results = append(results, iter.Value.(*LSMEntry))
+		iter = iter.Next()
+	}
+	return  results
+}

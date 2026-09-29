@@ -26,7 +26,17 @@ func (m *Memtable) Put(key, val string) {
 	} else {
 		sizeChange += int64(len(val))
 	}
-	entry := getLSMEntry(key, val, "add")
+	entry := GetLSMEntry(key, val, "add")
 	m.data.Set(key, entry)
 	m.size += sizeChange
+}
+
+func (m *Memtable) Del(key string) {
+	keyExists := m.data.Get(key)
+	if keyExists != nil {
+		m.size += int64(len(keyExists.Value.(*LSMEntry).val))
+	} else {
+		m.size += int64(len(key))
+	}
+	m.data.Set(key, GetLSMEntry(key, nil, "del"))
 }

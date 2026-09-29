@@ -40,3 +40,11 @@ func (m *Memtable) Del(key string) {
 	}
 	m.data.Set(key, GetLSMEntry(key, nil, "del"))
 }
+
+func (m *Memtable) Get(key string) *LSMEntry {
+	keyExists := m.data.Get(key)
+	if keyExists != nil {
+		return keyExists.Value.(*LSMEntry)
+	}
+	return nil
+}

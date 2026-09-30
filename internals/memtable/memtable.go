@@ -62,3 +62,19 @@ func (m *Memtable) RangeScan(start, end string) [] *LSMEntry {
 	}
 	return  results
 }
+
+func (m *Memtable) SizeInbytes() int64 {
+	return m.size
+}
+
+func (m *Memtable) GetEntries() [] *LSMEntry {
+	var results []*LSMEntry
+	// turn this into an iterator
+	iter := m.data.Front()
+	for iter != nil {
+		results = append(results, iter.Value.(*LSMEntry))
+		iter = iter.Next()
+	}
+	return results
+}
+

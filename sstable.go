@@ -127,6 +127,28 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 		return nil, nil
 	}
 
+	exists, offSet := findOffsetForKey(s.index.Entries, key)
+	if !exists {
+		return nil, nil
+	}
+
+	if _, err := s.file.Seek(int64(s.dataOffSet + offSet), io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	size, err := readDataSize(s.file)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := readDataEntry(s.file, size)
+	if err != nil {
+		return nil, err
+	}
+	entry := LSMEntry{}
+	mustUnmarshal(data, &entry)
+	
+	return &entry, nil
 }
 
 func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
@@ -145,4 +167,20 @@ func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
 	}
 
 	return false, 0
+}
+
+func readDataSize(file *os.File) (int64, error) {
+	var size int64
+	if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
+func readDataEntry(file *os.File, size int64) ([]byte, error) {
+	data := make([]byte, size)
+	if _, err := file.Read(data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }

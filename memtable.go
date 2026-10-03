@@ -1,14 +1,10 @@
-package memtable
+package main
 
 import "github.com/huandu/skiplist"
 
 type Memtable struct {
 	data skiplist.SkipList
 	size int64
-}
-
-type LSMEntry struct{
-	Key, Val, Op string
 }
 
 func NewMemTable() *Memtable{

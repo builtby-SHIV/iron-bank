@@ -1,25 +1,23 @@
-package sstable
+package main
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
-	"iron-bank/internals/lsm_tree/bloomfilter"
-	"iron-bank/internals/lsm_tree/memtable"
 	"os"
 
 	"google.golang.org/protobuf/proto"
 )
 
 type SSTable struct {
-	bloomFilter *bloomfilter.BloomFilter
+	bloomFilter *BloomFilter
 	index       *Index
 	file        *os.File
 	dataOffSet  int64
 }
 
-func SerializeToSSTable(messages []*memtable.LSMEntry, filename string) (*SSTable, error) {
+func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error) {
 	bloomFilter, index, entriesBuffer, err := buildMetaDataAndEntriesBuffer(messages)
 
 	if err != nil {
@@ -42,9 +40,9 @@ func SerializeToSSTable(messages []*memtable.LSMEntry, filename string) (*SSTabl
 	return &SSTable{bloomFilter: bloomFilter, index: index, file: file, dataOffSet: dataOffSet}, nil
 }
 
-func buildMetaDataAndEntriesBuffer(messages []*memtable.LSMEntry) (*bloomfilter.BloomFilter, *Index, *bytes.Buffer, error) {
+func buildMetaDataAndEntriesBuffer(messages []*LSMEntry) (*BloomFilter, *Index, *bytes.Buffer, error) {
 	var index []*IndexEntry
-	var bloomFilter *bloomfilter.BloomFilter = bloomfilter.NewBloomFilter(1000000)
+	var bloomFilter *BloomFilter = NewBloomFilter(1000000)
 	var currentOffset int64 = 0
 	entriesBuffer := &bytes.Buffer{}
 

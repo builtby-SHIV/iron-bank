@@ -4,7 +4,7 @@
 // 	protoc        v7.36.0
 // source: serialization.proto
 
-package sstable
+package main
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -21,7 +21,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Bloomfilter struct {
+type Command int32
+
+const (
+	Command_PUT       Command = 0
+	Command_DELETE    Command = 1
+	Command_WRITE_SST Command = 2
+)
+
+// Enum value maps for Command.
+var (
+	Command_name = map[int32]string{
+		0: "PUT",
+		1: "DELETE",
+		2: "WRITE_SST",
+	}
+	Command_value = map[string]int32{
+		"PUT":       0,
+		"DELETE":    1,
+		"WRITE_SST": 2,
+	}
+)
+
+func (x Command) Enum() *Command {
+	p := new(Command)
+	*p = x
+	return p
+}
+
+func (x Command) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Command) Descriptor() protoreflect.EnumDescriptor {
+	return file_serialization_proto_enumTypes[0].Descriptor()
+}
+
+func (Command) Type() protoreflect.EnumType {
+	return &file_serialization_proto_enumTypes[0]
+}
+
+func (x Command) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Command.Descriptor instead.
+func (Command) EnumDescriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{0}
+}
+
+type BloomFilter struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BitSet        []bool                 `protobuf:"varint,1,rep,packed,name=bitSet,proto3" json:"bitSet,omitempty"`
 	Size          int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
@@ -29,20 +78,20 @@ type Bloomfilter struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Bloomfilter) Reset() {
-	*x = Bloomfilter{}
+func (x *BloomFilter) Reset() {
+	*x = BloomFilter{}
 	mi := &file_serialization_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Bloomfilter) String() string {
+func (x *BloomFilter) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Bloomfilter) ProtoMessage() {}
+func (*BloomFilter) ProtoMessage() {}
 
-func (x *Bloomfilter) ProtoReflect() protoreflect.Message {
+func (x *BloomFilter) ProtoReflect() protoreflect.Message {
 	mi := &file_serialization_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -54,19 +103,19 @@ func (x *Bloomfilter) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Bloomfilter.ProtoReflect.Descriptor instead.
-func (*Bloomfilter) Descriptor() ([]byte, []int) {
+// Deprecated: Use BloomFilter.ProtoReflect.Descriptor instead.
+func (*BloomFilter) Descriptor() ([]byte, []int) {
 	return file_serialization_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Bloomfilter) GetBitSet() []bool {
+func (x *BloomFilter) GetBitSet() []bool {
 	if x != nil {
 		return x.BitSet
 	}
 	return nil
 }
 
-func (x *Bloomfilter) GetSize() int64 {
+func (x *BloomFilter) GetSize() int64 {
 	if x != nil {
 		return x.Size
 	}
@@ -169,12 +218,80 @@ func (x *Index) GetEntries() []*IndexEntry {
 	return nil
 }
 
+type LSMEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Command       Command                `protobuf:"varint,2,opt,name=command,proto3,enum=Command" json:"command,omitempty"`
+	Value         []byte                 `protobuf:"bytes,3,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LSMEntry) Reset() {
+	*x = LSMEntry{}
+	mi := &file_serialization_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LSMEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LSMEntry) ProtoMessage() {}
+
+func (x *LSMEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_serialization_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LSMEntry.ProtoReflect.Descriptor instead.
+func (*LSMEntry) Descriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *LSMEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *LSMEntry) GetCommand() Command {
+	if x != nil {
+		return x.Command
+	}
+	return Command_PUT
+}
+
+func (x *LSMEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *LSMEntry) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
 var File_serialization_proto protoreflect.FileDescriptor
 
 const file_serialization_proto_rawDesc = "" +
 	"\n" +
 	"\x13serialization.proto\"9\n" +
-	"\vBloomfilter\x12\x16\n" +
+	"\vBloomFilter\x12\x16\n" +
 	"\x06bitSet\x18\x01 \x03(\bR\x06bitSet\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\"6\n" +
 	"\n" +
@@ -182,8 +299,18 @@ const file_serialization_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\".\n" +
 	"\x05Index\x12%\n" +
-	"\aentries\x18\x01 \x03(\v2\v.IndexEntryR\aentriesB\fZ\n" +
-	"./;sstableb\x06proto3"
+	"\aentries\x18\x01 \x03(\v2\v.IndexEntryR\aentries\"\x83\x01\n" +
+	"\bLSMEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\"\n" +
+	"\acommand\x18\x02 \x01(\x0e2\b.CommandR\acommand\x12\x19\n" +
+	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
+	"\x06_value*-\n" +
+	"\aCommand\x12\a\n" +
+	"\x03PUT\x10\x00\x12\n" +
+	"\n" +
+	"\x06DELETE\x10\x01\x12\r\n" +
+	"\tWRITE_SST\x10\x02B\tZ\a./;mainb\x06proto3"
 
 var (
 	file_serialization_proto_rawDescOnce sync.Once
@@ -197,19 +324,23 @@ func file_serialization_proto_rawDescGZIP() []byte {
 	return file_serialization_proto_rawDescData
 }
 
-var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_serialization_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_serialization_proto_goTypes = []any{
-	(*Bloomfilter)(nil), // 0: Bloomfilter
-	(*IndexEntry)(nil),  // 1: IndexEntry
-	(*Index)(nil),       // 2: Index
+	(Command)(0),        // 0: Command
+	(*BloomFilter)(nil), // 1: BloomFilter
+	(*IndexEntry)(nil),  // 2: IndexEntry
+	(*Index)(nil),       // 3: Index
+	(*LSMEntry)(nil),    // 4: LSMEntry
 }
 var file_serialization_proto_depIdxs = []int32{
-	1, // 0: Index.entries:type_name -> IndexEntry
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 0: Index.entries:type_name -> IndexEntry
+	0, // 1: LSMEntry.command:type_name -> Command
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_serialization_proto_init() }
@@ -217,18 +348,20 @@ func file_serialization_proto_init() {
 	if File_serialization_proto != nil {
 		return
 	}
+	file_serialization_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_serialization_proto_rawDesc), len(file_serialization_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   3,
+			NumEnums:      1,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_serialization_proto_goTypes,
 		DependencyIndexes: file_serialization_proto_depIdxs,
+		EnumInfos:         file_serialization_proto_enumTypes,
 		MessageInfos:      file_serialization_proto_msgTypes,
 	}.Build()
 	File_serialization_proto = out.File

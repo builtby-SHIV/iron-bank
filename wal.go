@@ -1,4 +1,4 @@
-package wal
+package main
 
 import (
 	"encoding/binary"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"iron-bank/internals/kvstore"
 	"os"
 	"sync"
 )
@@ -39,7 +38,7 @@ func StartLogger() (*WAL, error) {
 	return &WAL{ file: f, buf: make([]byte, 1024) }, nil
 }
 
-func (w *WAL) WriteToWal(op byte, kv *kvstore.KVStore, key, val []byte) error {
+func (w *WAL) WriteToWal(op byte, kv *KVStore, key, val []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	keyLen := len(key)
@@ -68,7 +67,7 @@ func (w *WAL) WriteToWal(op byte, kv *kvstore.KVStore, key, val []byte) error {
 	return nil
 }
 
-func (w *WAL) ReplayLog(kv *kvstore.KVStore) error {
+func (w *WAL) ReplayLog(kv *KVStore) error {
 	st, err := w.file.Stat()
 	if err != nil {
 		return err

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iron-bank/internals/kvstore"
-	"iron-bank/internals/wal"
 	"log"
 	"net/http"
 )
@@ -24,8 +22,8 @@ type NonAddRequest struct {
 }
 
 type Server struct {
-	kv *kvstore.KVStore
-	wal *wal.WAL
+	kv  *KVStore
+	wal *WAL
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -88,9 +86,9 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	mux := http.NewServeMux()
-	kv := kvstore.NewKVStore()
+	kv := NewKVStore()
 
-	wal, err := wal.StartLogger()
+	wal, err := StartLogger()
 	if err != nil {
 		log.Fatal(err.Error())
 		return

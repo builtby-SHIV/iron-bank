@@ -121,3 +121,28 @@ func writeSSTable(filename string, bloomfilterData, indexData []byte, entriesBuf
 
 	return dataOffSet, nil
 }
+
+func (s *SSTable) Get(key string) (*LSMEntry, error) {
+	if !s.bloomFilter.Test([]byte(key)) {
+		return nil, nil
+	}
+
+}
+
+func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
+	l := 0
+	h := len(index) - 1
+
+	for l <= h {
+		mid := (l + h) / 2
+		if index[mid].Key == key {
+			return true, int64(index[mid].Offset)
+		} else if index[mid].Key < key {
+			l = mid + 1
+		} else {
+			h = mid - 1
+		}
+	}
+
+	return false, 0
+}

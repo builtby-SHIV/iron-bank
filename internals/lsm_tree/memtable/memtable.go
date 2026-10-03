@@ -8,7 +8,7 @@ type Memtable struct {
 }
 
 type LSMEntry struct{
-	key, val, op string
+	Key, Val, Op string
 }
 
 func NewMemTable() *Memtable{

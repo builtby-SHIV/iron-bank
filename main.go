@@ -49,7 +49,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	var req NonAddRequest
-	var nf *kvstore.NotFoundError
+	var nf *NotFoundError
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

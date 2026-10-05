@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"os"
-
-	"google.golang.org/protobuf/proto"
 )
 
 type SSTable struct {
@@ -17,6 +14,12 @@ type SSTable struct {
 	dataOffSet  int64
 }
 
+type SSTableIterator struct {
+	s *SSTable
+	file *os.File
+	value *LSMEntry
+}
+
 func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error) {
 	bloomFilter, index, entriesBuffer, err := buildMetaDataAndEntriesBuffer(messages)
 
@@ -24,8 +27,8 @@ func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error)
 		return nil, err
 	}
 
-	indexData := mustMarshal(index)
-	bloomFilterData := mustMarshal(bloomFilter)
+	indexData := MustMarshal(index)
+	bloomFilterData := MustMarshal(bloomFilter)
 
 	dataOffSet, err := writeSSTable(filename, bloomFilterData, indexData, entriesBuffer)
 	if err != nil {
@@ -47,7 +50,7 @@ func buildMetaDataAndEntriesBuffer(messages []*LSMEntry) (*BloomFilter, *Index, 
 	entriesBuffer := &bytes.Buffer{}
 
 	for _, msg := range messages {
-		data := mustMarshal(msg)
+		data := MustMarshal(msg)
 		entrySize := int64(len(data))
 
 		//dense index, 1M keys means 1M keys present in index
@@ -65,21 +68,6 @@ func buildMetaDataAndEntriesBuffer(messages []*LSMEntry) (*BloomFilter, *Index, 
 	}
 
 	return bloomFilter, &Index{Entries: index}, entriesBuffer, nil
-}
-
-func mustMarshal[T proto.Message](pb T) []byte {
-	bytes, err := proto.Marshal(pb)
-	if err != nil {
-		panic(fmt.Sprintf("failed to marhshal proto %v", err))
-	}
-	return bytes
-}
-
-func mustUnmarshal [T proto.Message](bytes []byte, pb T) {
-	err := proto.Unmarshal(bytes, pb)
-	if err != nil {
-		panic(fmt.Sprintf("failed to unmarhshal proto %v", err))
-	}
 }
 
 func writeSSTable(filename string, bloomfilterData, indexData []byte, entriesBuffer *bytes.Buffer) (int64, error) {
@@ -127,7 +115,7 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 		return nil, nil
 	}
 
-	exists, offSet := findOffsetForKey(s.index.Entries, key)
+	exists, offSet := FindOffsetForKey(s.index.Entries, key)
 	if !exists {
 		return nil, nil
 	}
@@ -136,23 +124,23 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 		return nil, err
 	}
 
-	size, err := readDataSize(s.file)
+	size, err := ReadDataSize(s.file)
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := readDataEntry(s.file, size)
+	data, err := ReadDataEntry(s.file, size)
 	if err != nil {
 		return nil, err
 	}
 	entry := LSMEntry{}
-	mustUnmarshal(data, &entry)
+	MustUnmarshal(data, &entry)
 	
 	return &entry, nil
 }
 
 func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
-	exists, offSet := findOffsetForRangeKey(s.index.Entries, startKey)
+	exists, offSet := FindOffsetForRangeKey(s.index.Entries, startKey)
 	if !exists {
 		return nil, nil
 	}
@@ -164,80 +152,24 @@ func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 	var res []*LSMEntry
 	loop:
 	for {
-		size, err := readDataSize(s.file)
+		size, err := ReadDataSize(s.file)
 		if err != nil {
 			return nil, err
 		}
 
-		data, err := readDataEntry(s.file, size)
+		data, err := ReadDataEntry(s.file, size)
 		if err != nil {
 			return nil, err
 		}
 		entry := LSMEntry{}
-		mustUnmarshal(data, &entry)
+		MustUnmarshal(data, &entry)
 		res = append(res, &entry)
-		
+
 		if entry.Key == endKey{
 			break loop
 		}
 	}
 
 	return res, nil
-}
-
-func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
-	l := 0
-	h := len(index) - 1
-
-	for l <= h {
-		mid := (l + h) / 2
-		if index[mid].Key == key {
-			return true, int64(index[mid].Offset)
-		} else if index[mid].Key < key {
-			l = mid + 1
-		} else {
-			h = mid - 1
-		}
-	}
-
-	return false, 0
-}
-
-func findOffsetForRangeKey(index []*IndexEntry, key string) (bool, int64) {
-	l := 0
-	h := len(index) - 1
-
-	for l <= h {
-		mid := (l + h) / 2
-		if index[mid].Key == key {
-			return true, int64(index[mid].Offset)
-		} else if index[mid].Key < key {
-			l = mid + 1
-		} else {
-			h = mid - 1
-		}
-	}
-
-	if l >= len(index) {
-		return false, 0
-	}
-
-	return true, int64(index[l].Offset)
-}
-
-func readDataSize(file *os.File) (int64, error) {
-	var size int64
-	if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
-		return 0, err
-	}
-	return size, nil
-}
-
-func readDataEntry(file *os.File, size int64) ([]byte, error) {
-	data := make([]byte, size)
-	if _, err := file.Read(data); err != nil {
-		return nil, err
-	}
-	return data, nil
 }
 

@@ -173,3 +173,49 @@ func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 	return res, nil
 }
 
+func (s *SSTable) Front() *SSTableIterator {
+	file, err := os.Open(s.file.Name())
+	if err != nil {
+		return nil
+	}
+
+	i := &SSTableIterator{s: s, file: file, value: &LSMEntry{}}
+	if _, err := s.file.Seek(int64(s.dataOffSet), io.SeekStart); err != nil {
+		return nil
+	}
+
+	size, err := ReadDataSize(i.file)
+	if err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		panic(err)
+	}
+
+	data, err := ReadDataEntry(i.file, size)
+	if err != nil {
+		return nil
+	}
+
+	MustUnmarshal(data, i.value)
+	return i
+}
+
+func (i *SSTableIterator) Next() *SSTableIterator {
+	size, err := ReadDataSize(i.file)
+	if err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		panic(err)
+	}
+
+	data, err := ReadDataEntry(i.file, size)
+	if err != nil {
+		return nil
+	}
+
+	i.value = &LSMEntry{}
+	MustUnmarshal(data, i.value)
+	return i
+}

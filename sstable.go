@@ -169,6 +169,28 @@ func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
 	return false, 0
 }
 
+func findOffsetForRangeKey(index []*IndexEntry, key string) (bool, int64) {
+	l := 0
+	h := len(index) - 1
+
+	for l <= h {
+		mid := (l + h) / 2
+		if index[mid].Key == key {
+			return true, int64(index[mid].Offset)
+		} else if index[mid].Key < key {
+			l = mid + 1
+		} else {
+			h = mid - 1
+		}
+	}
+
+	if l >= len(index) {
+		return false, 0
+	}
+
+	return true, int64(index[l].Offset)
+}
+
 func readDataSize(file *os.File) (int64, error) {
 	var size int64
 	if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
@@ -184,3 +206,4 @@ func readDataEntry(file *os.File, size int64) ([]byte, error) {
 	}
 	return data, nil
 }
+

@@ -151,6 +151,40 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 	return &entry, nil
 }
 
+func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
+	exists, offSet := findOffsetForRangeKey(s.index.Entries, startKey)
+	if !exists {
+		return nil, nil
+	}
+
+	if _, err := s.file.Seek(int64(s.dataOffSet + offSet), io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	var res []*LSMEntry
+	loop:
+	for {
+		size, err := readDataSize(s.file)
+		if err != nil {
+			return nil, err
+		}
+
+		data, err := readDataEntry(s.file, size)
+		if err != nil {
+			return nil, err
+		}
+		entry := LSMEntry{}
+		mustUnmarshal(data, &entry)
+		res = append(res, &entry)
+		
+		if entry.Key == endKey{
+			break loop
+		}
+	}
+
+	return res, nil
+}
+
 func findOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
 	l := 0
 	h := len(index) - 1

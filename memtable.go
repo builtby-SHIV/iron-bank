@@ -65,7 +65,6 @@ func (m *Memtable) SizeInbytes() int64 {
 
 func (m *Memtable) GetEntries() [] *LSMEntry {
 	var results []*LSMEntry
-	// turn this into an iterator
 	iter := m.data.Front()
 	for iter != nil {
 		results = append(results, iter.Value.(*LSMEntry))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"sync"
 )
 
@@ -67,4 +68,42 @@ func Open(dir string, maxMemtableSize int64) (*LSMEntry, error) {
 	go lsm.backgroundMemTableflushing()
 
 	return lsm, nil
+}
+
+func (l *LSMTree) loadSSTables() error {
+	if err := os.MkdirAll(l.directory, 0755); err != nil {
+		return err
+	}
+
+	if err := l.loadSSTablesFromDisk(); err != nil {
+		return err
+	}
+
+	l.sortSSTablesBySequenceNumber()
+	l.initializeCurrentSequenceNumber()
+
+	return nil
+}
+
+func (l *LSMTree) loadSSTablesFromDisk() error {
+	files, err := os.ReadDir(l.directory)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.IsDir() || !isSSTableFile(file.Name()) {
+			continue
+		}
+
+		ssTable, err := OpenSSTable(l.directory + "/" + file.Name())
+		if err != nil {
+			return err
+		}
+		
+		level := getLevelFromSSTableFileName(ssTable.file.Name())
+		l.levels[level].ssTables = append(l.levels[level].ssTables, ssTable)
+	}
+
+	return nil
 }

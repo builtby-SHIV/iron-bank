@@ -150,6 +150,7 @@ func (l *LSMTree) PUT(key, val string) error {
 		l.flushingQueueMu.Lock()
 		l.flushingQueue = append(l.flushingQueue, l.memtable)
 		l.flushingQueueMu.Unlock()
+		l.flushingChan <- l.memtable
 		l.memtable = NewMemTable()
 	}
 

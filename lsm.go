@@ -1,12 +1,17 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"os"
+	"slices"
+	"strconv"
 	"sync"
 )
 
 const (
+	SSTableFilePrefix  = "sstable_"
+	WALDirectorySuffix = "_wal"
 	maxLevel = 6
 )
 
@@ -106,4 +111,33 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 	}
 
 	return nil
+}
+
+func (l *LSMTree) sortSSTablesBySequenceNumber() {
+	for _, level := range l.levels {
+		slices.SortFunc(level.ssTables, func(i, j *SSTable) int {
+			seq1 := l.getSequenceNumber(i.file.Name())
+			seq2 := l.getSequenceNumber(j.file.Name())
+			return cmp.Compare(seq2, seq1)
+		})
+	}
+}
+
+func (l *LSMTree) getSequenceNumber(filename string) uint64 {
+	sequenceStr := filename[len(l.directory)+1+2+len(SSTableFilePrefix):]
+	sequence, err := strconv.ParseUint(sequenceStr, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return sequence
+}
+
+
+func (l *LSMTree) getLevelFromSSTableFilename(filename string) int {
+	levelStr := filename[len(l.directory) + 1 + len(SSTableFilePrefix) : len(l.directory) + 2 + len(SSTableFilePrefix)]
+	level, err := strconv.Atoi(levelStr)
+	if err != nil {
+		panic(err)
+	}
+	return level
 }

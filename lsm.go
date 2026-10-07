@@ -255,3 +255,7 @@ func (l *LSMTree) getLevelFromSSTableFileName(filename string) int {
 func (l *LSMTree) getSSTableFileName(level int) string {
 	return fmt.Sprintf("%s/%s%d_%d", l.directory, SSTableFilePrefix, level, atomic.LoadUint64(&l.current_sst_sequence))
 }
+
+func isSSTableFile(filename string) bool {
+	return filename[:len(SSTableFilePrefix)] == SSTableFilePrefix
+}

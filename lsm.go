@@ -115,20 +115,10 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 	return nil
 }
 
-func (l *LSMTree) sortSSTablesBySequenceNumber() {
-	for _, level := range l.levels {
-		slices.SortFunc(level.ssTables, func(i, j *SSTable) int {
-			seq1 := l.getSequenceNumber(i.file.Name())
-			seq2 := l.getSequenceNumber(j.file.Name())
-			return cmp.Compare(seq1, seq2)
-		})
-	}
-}
-
 func (l *LSMTree) PUT(key, val string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
+	
 	l.memtable.Put(key, val)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
 		l.flushingQueueMu.Lock()
@@ -151,7 +141,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 		return string(val.Value), nil
 	}
 	l.mu.RUnlock()
-
+	
 	l.flushingQueueMu.RLock()
 	for i := len(l.flushingQueue) - 1; i>= 0; i-- {
 		val := l.flushingQueue[i].Get(key)
@@ -163,7 +153,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 		}
 	}
 	l.flushingQueueMu.RUnlock()
-
+	
 	for level := range l.levels {
 		l.levels[level].mu.RLock()
 		for i := len(l.levels[level].ssTables) - 1; i>= 0; i-- {
@@ -181,8 +171,24 @@ func (l *LSMTree) GET(key string) (string, error) {
 			}
 		}
 	}
-
+	
 	return "", nil
+}
+
+func (l *LSMTree) DELETE(key, val string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	
+	l.memtable.Del(key)
+	if l.memtable.SizeInbytes() > l.maxMemtableSize {
+		l.flushingQueueMu.Lock()
+		l.flushingQueue = append(l.flushingQueue, l.memtable)
+		l.flushingQueueMu.Unlock()
+		l.flushingChan <- l.memtable
+		l.memtable = NewMemTable()
+	}
+	
+	return nil
 }
 
 func OpenSSTable(filename string) (*SSTable, error) {
@@ -190,7 +196,7 @@ func OpenSSTable(filename string) (*SSTable, error) {
 	if err != nil{
 		return nil, err
 	}
-
+	
 	bloomFilter, index, dataOffset, err := ReadSSTableMetaData(file)
 	return &SSTable{bloomFilter: bloomFilter, index: index, dataOffSet: dataOffset}, nil
 }
@@ -232,6 +238,16 @@ func (l *LSMTree) flushMemTable(memtable *Memtable) {
 	l.levels[0].mu.Unlock()
 	
 	l.compactionChan <- 0
+}
+
+func (l *LSMTree) sortSSTablesBySequenceNumber() {
+	for _, level := range l.levels {
+		slices.SortFunc(level.ssTables, func(i, j *SSTable) int {
+			seq1 := l.getSequenceNumber(i.file.Name())
+			seq2 := l.getSequenceNumber(j.file.Name())
+			return cmp.Compare(seq1, seq2)
+		})
+	}
 }
 
 func (l *LSMTree) getSequenceNumber(filename string) uint64 {

@@ -125,23 +125,6 @@ func (l *LSMTree) sortSSTablesBySequenceNumber() {
 	}
 }
 
-func (l *LSMTree) getSequenceNumber(filename string) uint64 {
-	sequenceStr := filename[len(l.directory)+1+2+len(SSTableFilePrefix):]
-	sequence, err := strconv.ParseUint(sequenceStr, 10, 64)
-	if err != nil {
-		panic(err)
-	}
-	return sequence
-}
-
-func (l *LSMTree) getLevelFromSSTableFilename(filename string) int {
-	levelStr := filename[len(l.directory) + 1 + len(SSTableFilePrefix) : len(l.directory) + 2 + len(SSTableFilePrefix)]
-	level, err := strconv.Atoi(levelStr)
-	if err != nil {
-		panic(err)
-	}
-	return level
-}
 
 func (l *LSMTree) PUT(key, val string) error {
 	l.mu.Lock()
@@ -155,7 +138,7 @@ func (l *LSMTree) PUT(key, val string) error {
 		l.flushingChan <- l.memtable
 		l.memtable = NewMemTable()
 	}
-
+	
 	return nil
 }
 
@@ -177,24 +160,43 @@ func (l *LSMTree) flushMemTable(memtable *Memtable) {
 	if memtable.size == 0 {
 		return
 	}
-
+	
 	atomic.AddUint64(&l.current_sst_sequence, 1)
 	sstableFileName := l.getSSTableFileName(0)
 	sst, err := SerializeToSSTable(memtable.GetEntries(), sstableFileName)
 	if err != nil {
 		panic(err)
 	}
-
+	
 	l.levels[0].mu.Lock()
 	l.flushingQueueMu.Lock()
-
+	
 	l.levels[0].ssTables = append(l.levels[0].ssTables, sst)
+	l.flushingQueue[0] = nil
 	l.flushingQueue = l.flushingQueue[1:]
-
+	
 	l.flushingQueueMu.Unlock()
 	l.levels[0].mu.Unlock()
-
+	
 	l.compactionChan <- 0
+}
+
+func (l *LSMTree) getSequenceNumber(filename string) uint64 {
+	sequenceStr := filename[len(l.directory)+1+2+len(SSTableFilePrefix):]
+	sequence, err := strconv.ParseUint(sequenceStr, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return sequence
+}
+
+func (l *LSMTree) getLevelFromSSTableFilename(filename string) int {
+	levelStr := filename[len(l.directory) + 1 + len(SSTableFilePrefix) : len(l.directory) + 2 + len(SSTableFilePrefix)]
+	level, err := strconv.Atoi(levelStr)
+	if err != nil {
+		panic(err)
+	}
+	return level
 }
 
 func (l *LSMTree) getSSTableFileName(level int) string {

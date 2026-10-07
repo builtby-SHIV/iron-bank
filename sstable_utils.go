@@ -78,3 +78,40 @@ func ReadDataEntry(file *os.File, size int64) ([]byte, error) {
 	}
 	return data, nil
 }
+
+func ReadSSTableMetaData(file *os.File) (*BloomFilter, *Index, int64, error) {
+	var dataOffset int64 = 0
+
+	bloomFilterSize, err := ReadDataSize(file)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	dataOffset += int64(binary.Size(bloomFilterSize))
+
+	bloomFilterData := make([]byte, bloomFilterSize)
+	bytesRead, err := file.Read(bloomFilterData)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	dataOffset += int64(bytesRead)
+
+	indexSize, err := ReadDataSize(file)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	dataOffset += int64(binary.Size(indexSize))
+
+	indexData := make([]byte, indexSize)
+	bytesRead, err = file.Read(indexData)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	dataOffset += int64(bytesRead)
+
+	bloomFilter := &BloomFilter{}
+	MustUnmarshal(bloomFilterData, bloomFilter)
+	index := &Index{}
+	MustUnmarshal(indexData, index)
+
+	return bloomFilter, index, dataOffset, nil
+}

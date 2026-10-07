@@ -185,6 +185,16 @@ func (l *LSMTree) GET(key string) (string, error) {
 	return "", nil
 }
 
+func OpenSSTable(filename string) (*SSTable, error) {
+	file, err := os.Open(filename)
+	if err != nil{
+		return nil, err
+	}
+
+	bloomFilter, index, dataOffset, err := ReadSSTableMetaData(file)
+	return &SSTable{bloomFilter: bloomFilter, index: index, dataOffSet: dataOffset}, nil
+}
+
 func (l *LSMTree) backgroundMemTableflushing() error {
 	defer l.wg.Done()
 	for {

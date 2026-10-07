@@ -3,10 +3,12 @@ package main
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -155,4 +157,46 @@ func (l *LSMTree) PUT(key, val string) error {
 	}
 
 	return nil
+}
+
+func (l *LSMTree) backgroundMemTableflushing() error {
+	defer l.wg.Done()
+	for {
+		select {
+		case <- l.ctx.Done():
+			if len(l.flushingChan) == 0 {
+				return nil
+			}
+		case memtable := <- l.flushingChan:
+			l.flushMemTable(memtable)
+		}
+	}
+}
+
+func (l *LSMTree) flushMemTable(memtable *Memtable) {
+	if memtable.size == 0 {
+		return
+	}
+
+	atomic.AddUint64(&l.current_sst_sequence, 1)
+	sstableFileName := l.getSSTableFileName(0)
+	sst, err := SerializeToSSTable(memtable.GetEntries(), sstableFileName)
+	if err != nil {
+		panic(err)
+	}
+
+	l.levels[0].mu.Lock()
+	l.flushingQueueMu.Lock()
+
+	l.levels[0].ssTables = append(l.levels[0].ssTables, sst)
+	l.flushingQueue = l.flushingQueue[1:]
+
+	l.flushingQueueMu.Unlock()
+	l.levels[0].mu.Unlock()
+
+	l.compactionChan <- 0
+}
+
+func (l *LSMTree) getSSTableFileName(level int) string {
+	return fmt.Sprintf("%s/%s%d_%d", l.directory, SSTableFilePrefix, level, atomic.LoadUint64(&l.current_sst_sequence))
 }

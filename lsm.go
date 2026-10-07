@@ -44,7 +44,7 @@ type LSMTree struct {
 	wg                   sync.WaitGroup
 }
 
-func Open(dir string, maxMemtableSize int64) (*LSMEntry, error) {
+func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	levels := make([]*level, maxLevel)
@@ -108,7 +108,7 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 			return err
 		}
 		
-		level := getLevelFromSSTableFileName(ssTable.file.Name())
+		level := l.getLevelFromSSTableFileName(ssTable.file.Name())
 		l.levels[level].ssTables = append(l.levels[level].ssTables, ssTable)
 	}
 
@@ -125,7 +125,6 @@ func (l *LSMTree) sortSSTablesBySequenceNumber() {
 	}
 }
 
-
 func (l *LSMTree) PUT(key, val string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -140,6 +139,50 @@ func (l *LSMTree) PUT(key, val string) error {
 	}
 	
 	return nil
+}
+
+func (l *LSMTree) GET(key string) (string, error) {
+	l.mu.RLock()
+	val := l.memtable.Get(key)
+	if val != nil {
+		if val.Command == Command_DELETE {
+			return "", nil
+		}
+		return string(val.Value), nil
+	}
+	l.mu.RUnlock()
+
+	l.flushingQueueMu.RLock()
+	for i := len(l.flushingQueue) - 1; i>= 0; i-- {
+		val := l.flushingQueue[i].Get(key)
+		if val != nil {
+			if val.Command == Command_DELETE {
+				return "", nil
+			}
+			return string(val.Value), nil
+		}
+	}
+	l.flushingQueueMu.RUnlock()
+
+	for level := range l.levels {
+		l.levels[level].mu.RLock()
+		for i := len(l.levels[level].ssTables) - 1; i>= 0; i-- {
+			val, err := l.levels[level].ssTables[i].Get(key)
+			if err != nil {
+				l.levels[level].mu.RUnlock()
+				return "", err
+			}
+			if val != nil {
+				l.levels[level].mu.RUnlock()
+				if val.Command == Command_DELETE {
+					return "", nil
+				}
+				return string(val.Value), nil
+			}
+		}
+	}
+
+	return "", nil
 }
 
 func (l *LSMTree) backgroundMemTableflushing() error {
@@ -190,7 +233,7 @@ func (l *LSMTree) getSequenceNumber(filename string) uint64 {
 	return sequence
 }
 
-func (l *LSMTree) getLevelFromSSTableFilename(filename string) int {
+func (l *LSMTree) getLevelFromSSTableFileName(filename string) int {
 	levelStr := filename[len(l.directory) + 1 + len(SSTableFilePrefix) : len(l.directory) + 2 + len(SSTableFilePrefix)]
 	level, err := strconv.Atoi(levelStr)
 	if err != nil {

@@ -191,6 +191,40 @@ func (l *LSMTree) DELETE(key, val string) error {
 	return nil
 }
 
+func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
+	ranges := [][]*LSMEntry{}
+	
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	for _, level := range l.levels {
+		level.mu.RLock()
+		defer level.mu.RLock()
+	}
+
+	l.flushingQueueMu.RLock()
+	defer l.flushingQueueMu.RUnlock()
+
+	ranges = append(ranges, l.memtable.RangeScan(startKey, endKey))
+
+	for i := len(l.flushingQueue) - 1; i >= 0; i-- {
+		entries := l.flushingQueue[i].RangeScan(startKey, endKey)
+		ranges = append(ranges, entries)
+	}
+
+	for _, level := range l.levels {
+		for i := len(level.ssTables) - 1; i >= 0; i-- {
+			entries, err := level.ssTables[i].RangeScan(startKey, endKey)
+			if err != nil {
+				return nil, err
+			}
+			ranges = append(ranges, entries)
+		}
+	}
+
+	return mergeRanges(ranges), nil
+}
+
 func OpenSSTable(filename string) (*SSTable, error) {
 	file, err := os.Open(filename)
 	if err != nil{

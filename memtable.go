@@ -1,6 +1,10 @@
 package main
 
-import "github.com/huandu/skiplist"
+import (
+	"time"
+
+	"github.com/huandu/skiplist"
+)
 
 type Memtable struct {
 	data skiplist.SkipList
@@ -14,15 +18,15 @@ func NewMemTable() *Memtable{
 	}
 }
 
-func (m *Memtable) Put(key, val string) {
+func (m *Memtable) Put(key string, val []byte) {
 	sizeChange := int64(len(key))
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		m.size += int64(len(keyExists.Value.(*LSMEntry).val))
+		m.size += int64(len(keyExists.Value.(*LSMEntry).Value))
 	} else {
 		sizeChange += int64(len(val))
 	}
-	entry := GetLSMEntry(key, val, "add")
+	entry := getLSMEntry(key, &val, Command_PUT)
 	m.data.Set(key, entry)
 	m.size += sizeChange
 }
@@ -30,11 +34,11 @@ func (m *Memtable) Put(key, val string) {
 func (m *Memtable) Del(key string) {
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		m.size += int64(len(keyExists.Value.(*LSMEntry).val))
+		m.size += int64(len(keyExists.Value.(*LSMEntry).Value))
 	} else {
 		m.size += int64(len(key))
 	}
-	m.data.Set(key, GetLSMEntry(key, nil, "del"))
+	m.data.Set(key, getLSMEntry(key, nil, Command_DELETE))
 }
 
 func (m *Memtable) Get(key string) *LSMEntry {
@@ -73,3 +77,14 @@ func (m *Memtable) GetEntries() [] *LSMEntry {
 	return results
 }
 
+func getLSMEntry(key string, value *[]byte, command Command) *LSMEntry {
+	entry := &LSMEntry{
+		Key:       key,
+		Command:   command,
+		Timestamp: time.Now().UnixNano(),
+	}
+	if value != nil {
+		entry.Value = *value
+	}
+	return entry
+}

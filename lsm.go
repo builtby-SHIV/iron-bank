@@ -115,7 +115,7 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 	return nil
 }
 
-func (l *LSMTree) PUT(key, val string) error {
+func (l *LSMTree) PUT(key string, val []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	

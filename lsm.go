@@ -11,6 +11,16 @@ import (
 	"sync/atomic"
 )
 
+var maxSSTables = map[int]int{
+	0: 4,
+	1: 8,
+	2: 16,
+	3: 32,
+	4: 64,
+	5: 128,
+	6: 256,
+}
+
 const (
 	SSTableFilePrefix  = "sstable_"
 	WALDirectorySuffix = "_wal"
@@ -71,10 +81,25 @@ func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
 		return nil, err
 	}
 
-	lsm.wg.Add(1)
+	lsm.wg.Add(2)
+	go lsm.backgroundCompaction()
 	go lsm.backgroundMemTableflushing()
 
 	return lsm, nil
+}
+
+func (l *LSMTree) backgroundCompaction() error {
+	defer l.wg.Done()
+	for {
+		select{
+		case <- l.ctx.Done():
+			if readToExit := l.checkAndTriggerCompaction(); readToExit {
+				return nil
+			}
+		case compactionCandidate := <- l.compactionChan:
+			l.compactLevel(compactionCandidate)
+		}
+	}
 }
 
 func (l *LSMTree) loadSSTables() error {

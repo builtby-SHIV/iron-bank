@@ -20,6 +20,7 @@ type SSTableIterator struct {
 	value *LSMEntry
 }
 
+
 func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error) {
 	bloomFilter, index, entriesBuffer, err := buildMetaDataAndEntriesBuffer(messages)
 

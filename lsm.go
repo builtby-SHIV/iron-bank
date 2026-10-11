@@ -41,7 +41,7 @@ type LSMTree struct {
 	mu                   sync.RWMutex   
 	maxMemtableSize      int64          
 	directory            string         
-	wal                  *gw.WAL        
+	wal                  *WAL        
 	inRecovery           bool           
 	levels               []*level       
 	current_sst_sequence uint64         
@@ -54,8 +54,14 @@ type LSMTree struct {
 	wg                   sync.WaitGroup
 }
 
-func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
+func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	wal, err := OpenWal(dir+WALDirectorySuffix, true, 128000, 1000)
+	if err != nil {
+		cancel()
+		return  nil, err
+	}
 
 	levels := make([]*level, maxLevel)
 	for i := 0; i < maxLevel; i++ {
@@ -84,6 +90,12 @@ func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
 	lsm.wg.Add(2)
 	go lsm.backgroundCompaction()
 	go lsm.backgroundMemTableflushing()
+
+	if recoverFromWAL {
+		if err := lsm.recoverFromWAL(); err != nil {
+			return nil, err
+		}
+	}
 
 	return lsm, nil
 }
@@ -135,14 +147,14 @@ func (l *LSMTree) compactLevel(compactionCandidate int) error {
 		return err
 	}
 
-	l.levels[compactionCandidate].mu.RLock()
-	l.levels[compactionCandidate + 1].mu.RLock()
+	l.levels[compactionCandidate].mu.Lock()
+	l.levels[compactionCandidate + 1].mu.Lock()
 
 	l.deleteSSTableAtLevel(compactionCandidate, iterators)
 	l.addSSTableToLevel(mergedSSTable, compactionCandidate + 1)
 
-	l.levels[compactionCandidate].mu.RUnlock()
-	l.levels[compactionCandidate + 1].mu.RUnlock()
+	l.levels[compactionCandidate].mu.Unlock()
+	l.levels[compactionCandidate + 1].mu.Unlock()
 
 	return nil
 }
@@ -244,6 +256,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 	val := l.memtable.Get(key)
 	if val != nil {
 		if val.Command == Command_DELETE {
+			l.mu.RUnlock()
 			return "", nil
 		}
 		return string(val.Value), nil
@@ -262,22 +275,23 @@ func (l *LSMTree) GET(key string) (string, error) {
 	}
 	l.flushingQueueMu.RUnlock()
 	
-	for level := range l.levels {
-		l.levels[level].mu.RLock()
-		for i := len(l.levels[level].ssTables) - 1; i>= 0; i-- {
-			val, err := l.levels[level].ssTables[i].Get(key)
+	for i := range l.levels {
+		l.levels[i].mu.RLock()
+		for i := len(l.levels[i].ssTables) - 1; i>= 0; i-- {
+			val, err := l.levels[i].ssTables[i].Get(key)
 			if err != nil {
-				l.levels[level].mu.RUnlock()
+				l.levels[i].mu.RUnlock()
 				return "", err
 			}
 			if val != nil {
-				l.levels[level].mu.RUnlock()
+				l.levels[i].mu.RUnlock()
 				if val.Command == Command_DELETE {
 					return "", nil
 				}
 				return string(val.Value), nil
 			}
 		}
+		l.levels[i].mu.RUnlock()
 	}
 	
 	return "", nil
@@ -307,7 +321,7 @@ func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
 
 	for _, level := range l.levels {
 		level.mu.RLock()
-		defer level.mu.RLock()
+		defer level.mu.RUnlock()
 	}
 
 	l.flushingQueueMu.RLock()

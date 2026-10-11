@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"internal/strconv"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,7 @@ func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments 
 		currentSegment:      file,
 		lastSequenceNo:      0,
 		bufWriter:           bufio.NewWriter(file),
-		syncTimer:           time.NewTimer(syncInterval), // syncInterval is a predefined duration
+		syncTimer:           time.NewTimer(syncInterval),
 		shouldFsync:         enableFsync,
 		maxFileSize:         maxFileSize,
 		maxSegments:         maxSegments,
@@ -138,4 +139,40 @@ func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	}
 
 	return 0, nil
+}
+
+func (wal *WAL) sync() error {
+	if err := wal.bufWriter.Flush(); err != nil {
+		return err
+	}
+	if wal.shouldFsync {
+		if err := wal.currentSegment.Sync(); err != nil {
+			return err
+		}
+	}
+
+	wal.resetTimer()
+
+	return nil
+}
+
+func (wal *WAL) resetTimer() {
+	wal.syncTimer.Reset(syncInterval)
+}
+
+func (wal *WAL) keepSyncing() {
+	for {
+		select {
+		case <- wal.syncTimer.C:
+			wal.lock.Lock()
+			err := wal.sync()
+			wal.lock.Unlock()
+			if err != nil {
+				log.Printf("Error while performing sync: %v", err)
+			}
+
+		case <- wal.ctx.Done():
+			return
+		}
+	}
 }

@@ -102,6 +102,62 @@ func (l *LSMTree) backgroundCompaction() error {
 	}
 }
 
+func (l *LSMTree) checkAndTriggerCompaction() bool {
+	var readyToExit bool = true
+
+	for idx, level := range l.levels {
+		level.mu.RLock()
+		if len(level.ssTables) > maxSSTables[idx] {
+			l.compactionChan <- idx
+			readyToExit = false
+		}
+		level.mu.RUnlock()
+	}
+	return readyToExit
+}
+
+func (l *LSMTree) compactLevel(compactionCandidate int) error {
+	if compactionCandidate == maxLevel - 1 {
+		return nil
+	}
+
+	l.levels[compactionCandidate].mu.RLock()
+	if len(l.levels[compactionCandidate].ssTables) < maxSSTables[compactionCandidate] {
+		l.levels[compactionCandidate].mu.RUnlock()
+		return nil
+	}
+
+	_, iterators := l.getSSTableHandlesAtLevel(compactionCandidate)
+	l.levels[compactionCandidate].mu.RUnlock()
+
+	mergedSSTable, err := l.mergeSSTables(iterators, compactionCandidate + 1)
+	if err != nil {
+		return err
+	}
+
+	l.levels[compactionCandidate].mu.RLock()
+	l.levels[compactionCandidate + 1].mu.RLock()
+
+	l.deleteSSTableAtLevel(compactionCandidate)
+	l.addSSTableToLevel(compactionCandidate + 1)
+
+	l.levels[compactionCandidate].mu.RUnlock()
+	l.levels[compactionCandidate + 1].mu.RUnlock()
+
+	return nil
+}
+
+func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable, []*SSTableIterator){
+	sstables := l.levels[compactionCandidate].ssTables
+	iterators := make([]*SSTableIterator, len(sstables))
+
+	for i, sstable := range sstables {
+		iterators[i] = sstable.Front()
+	}
+
+	return sstables, iterators
+}
+
 func (l *LSMTree) loadSSTables() error {
 	if err := os.MkdirAll(l.directory, 0755); err != nil {
 		return err

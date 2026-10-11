@@ -25,8 +25,8 @@ type WAL struct {
 	syncTimer           *time.Timer
 	shouldFsync         bool
 	maxFileSize         int64
-	maxSegments         int
-	currentSegmentIndex int
+	maxSegments         int64
+	currentSegmentIndex int64
 	ctx                 context.Context
 	cancel              context.CancelFunc
 }
@@ -41,7 +41,7 @@ const (
 	segmentPrefix = "segment-"
 )
 
-func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments int) (*WAL, error) {
+func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments int64) (*WAL, error) {
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return nil, err
 	}
@@ -125,4 +125,17 @@ func createSegmentFile(directory string, segmentID int) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
+}
+
+func (wal *WAL) getLastSequenceNo() (uint64, error) {
+	entry, err := wal.getLastEntryInLog()
+	if err != nil {
+		return 0, err
+	}
+
+	if entry != nil {
+		return entry.GetLogSequenceNumber(), nil
+	}
+
+	return 0, nil
 }

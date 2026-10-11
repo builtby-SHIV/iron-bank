@@ -158,6 +158,18 @@ func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable,
 	return sstables, iterators
 }
 
+func (l *LSMTree) mergedSSTable(iterators []*SSTableIterator, targetLevel int) (*SSTable, error) {
+	mergedEntries := mergeIterators(iterators)
+
+	sstableFileName := l.getSSTableFileName(targetLevel)
+
+	sst, err := SerializeToSSTable(mergedEntries, sstableFileName)
+	if err != nil {
+		return nil, err
+	}
+	return sst, nil
+}
+
 func (l *LSMTree) loadSSTables() error {
 	if err := os.MkdirAll(l.directory, 0755); err != nil {
 		return err

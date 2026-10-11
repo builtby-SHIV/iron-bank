@@ -286,6 +286,66 @@ func (x *LSMEntry) GetTimestamp() int64 {
 	return 0
 }
 
+type WAL_Entry struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	LogSequenceNumber uint64                 `protobuf:"varint,1,opt,name=logSequenceNumber,proto3" json:"logSequenceNumber,omitempty"`
+	Data              []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	CRC               uint32                 `protobuf:"varint,3,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *WAL_Entry) Reset() {
+	*x = WAL_Entry{}
+	mi := &file_serialization_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WAL_Entry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WAL_Entry) ProtoMessage() {}
+
+func (x *WAL_Entry) ProtoReflect() protoreflect.Message {
+	mi := &file_serialization_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WAL_Entry.ProtoReflect.Descriptor instead.
+func (*WAL_Entry) Descriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *WAL_Entry) GetLogSequenceNumber() uint64 {
+	if x != nil {
+		return x.LogSequenceNumber
+	}
+	return 0
+}
+
+func (x *WAL_Entry) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *WAL_Entry) GetCRC() uint32 {
+	if x != nil {
+		return x.CRC
+	}
+	return 0
+}
+
 var File_serialization_proto protoreflect.FileDescriptor
 
 const file_serialization_proto_rawDesc = "" +
@@ -305,7 +365,11 @@ const file_serialization_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\x0e2\b.CommandR\acommand\x12\x19\n" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
-	"\x06_value*-\n" +
+	"\x06_value\"_\n" +
+	"\tWAL_Entry\x12,\n" +
+	"\x11logSequenceNumber\x18\x01 \x01(\x04R\x11logSequenceNumber\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
+	"\x03CRC\x18\x03 \x01(\rR\x03CRC*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
@@ -325,13 +389,14 @@ func file_serialization_proto_rawDescGZIP() []byte {
 }
 
 var file_serialization_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_serialization_proto_goTypes = []any{
 	(Command)(0),        // 0: Command
 	(*BloomFilter)(nil), // 1: BloomFilter
 	(*IndexEntry)(nil),  // 2: IndexEntry
 	(*Index)(nil),       // 3: Index
 	(*LSMEntry)(nil),    // 4: LSMEntry
+	(*WAL_Entry)(nil),   // 5: WAL_Entry
 }
 var file_serialization_proto_depIdxs = []int32{
 	2, // 0: Index.entries:type_name -> IndexEntry
@@ -355,7 +420,7 @@ func file_serialization_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_serialization_proto_rawDesc), len(file_serialization_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

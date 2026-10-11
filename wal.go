@@ -128,6 +128,18 @@ func createSegmentFile(directory string, segmentID int) (*os.File, error) {
 	return file, nil
 }
 
+func (w *WAL) writeEntry(data []byte) error {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	if err := w.rotateIfNeeded(); err != nil {
+		return err
+	}
+
+	w.lastSequenceNo += 1
+	w.writeToBuffer(data)
+}
+
 func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	entry, err := wal.getLastEntryInLog()
 	if err != nil {

@@ -27,3 +27,9 @@ enum Command {
   DELETE = 1;
   WRITE_SST = 2;
 }
+
+message WAL_Entry {
+    uint64   logSequenceNumber = 1;
+    bytes   data = 2;
+    uint32  CRC = 3;
+}

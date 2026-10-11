@@ -138,8 +138,8 @@ func (l *LSMTree) compactLevel(compactionCandidate int) error {
 	l.levels[compactionCandidate].mu.RLock()
 	l.levels[compactionCandidate + 1].mu.RLock()
 
-	l.deleteSSTableAtLevel(compactionCandidate)
-	l.addSSTableToLevel(compactionCandidate + 1)
+	l.deleteSSTableAtLevel(compactionCandidate, iterators)
+	l.addSSTableToLevel(mergedSSTable, compactionCandidate + 1)
 
 	l.levels[compactionCandidate].mu.RUnlock()
 	l.levels[compactionCandidate + 1].mu.RUnlock()
@@ -158,7 +158,7 @@ func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable,
 	return sstables, iterators
 }
 
-func (l *LSMTree) mergedSSTable(iterators []*SSTableIterator, targetLevel int) (*SSTable, error) {
+func (l *LSMTree) mergeSSTables(iterators []*SSTableIterator, targetLevel int) (*SSTable, error) {
 	mergedEntries := mergeIterators(iterators)
 
 	sstableFileName := l.getSSTableFileName(targetLevel)
@@ -168,6 +168,21 @@ func (l *LSMTree) mergedSSTable(iterators []*SSTableIterator, targetLevel int) (
 		return nil, err
 	}
 	return sst, nil
+}
+
+func (l *LSMTree) deleteSSTableAtLevel(level int, iterators []*SSTableIterator) {
+	l.levels[level].ssTables = l.levels[level].ssTables[len(iterators):]
+	for _, it := range iterators {
+		_ = it.s.file.Close()
+		if err := os.Remove(it.s.file.Name()); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (l *LSMTree) addSSTableToLevel(sst *SSTable, level int) {
+	l.levels[level].ssTables = append(l.levels[level].ssTables, sst)
+	l.compactionChan <- level
 }
 
 func (l *LSMTree) loadSSTables() error {
@@ -401,4 +416,21 @@ func (l *LSMTree) getSSTableFileName(level int) string {
 
 func isSSTableFile(filename string) bool {
 	return filename[:len(SSTableFilePrefix)] == SSTableFilePrefix
+}
+
+func (l *LSMTree) initializeCurrentSequenceNumber() error {
+	var maxSequence uint64
+	for _, level := range l.levels {
+		if len(level.ssTables) > 0 {
+			lastSSTable := level.ssTables[len(level.ssTables)-1]
+			sequence := l.getSequenceNumber(lastSSTable.file.Name())
+			if sequence > maxSequence {
+				maxSequence = sequence
+			}
+		}
+	}
+
+	atomic.StoreUint64(&l.current_sst_sequence, maxSequence)
+
+	return nil
 }

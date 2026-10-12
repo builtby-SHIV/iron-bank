@@ -243,6 +243,14 @@ func (w *WAL) findOldestSegmentFile(files []string) (string, error) {
 	return oldestSegment, nil
 }
 
+func (w *WAL) Close() error {
+	w.cancel()
+	if err := w.sync(); err != nil {
+		return err
+	}
+	return w.currentSegment.Close()
+}
+
 func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	entry, err := wal.getLastEntryInLog()
 	if err != nil {
@@ -255,6 +263,34 @@ func (wal *WAL) getLastSequenceNo() (uint64, error) {
 
 	return 0, nil
 }
+
+func (w *WAL) readAllEntries(file *os.File) ([]*WAL_Entry, error) {
+	var entries []*WAL_Entry
+
+	var size int64
+	for {
+		if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return entries, err
+		}
+		data := make([]byte, size)
+		if _, err := io.ReadFull(file, data); err != nil {
+			if err == io.EOF {
+				break
+			}
+		}
+
+		entry, err := unmarshalAndVerify(data)
+		if err != nil {
+			return entries, err
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+} 
 
 func (wal *WAL) sync() error {
 	if err := wal.bufWriter.Flush(); err != nil {

@@ -160,6 +160,21 @@ func (w *WAL) writeToBuffer(data []byte) error {
 	return nil
 }
 
+func (w *WAL) rotateIfNeeded() error {
+	fileInfo, err := w.currentSegment.Stat()
+	if err != nil {
+		return err
+	}
+
+	if fileInfo.Size() + int64(w.bufWriter.Buffered()) >= w.maxFileSize {
+		if err := w.roatateLog(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	entry, err := wal.getLastEntryInLog()
 	if err != nil {

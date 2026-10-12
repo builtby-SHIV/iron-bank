@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"internal/strconv"
 	"io"
 	"log"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -498,4 +498,56 @@ func verifyCRC(entry *WAL_Entry) bool {
 	actualCRC := crc32.ChecksumIEEE(append(entry.GetData(), byte(entry.GetLogSequenceNumber())))
 
 	return entry.CRC == actualCRC
+}
+
+func (wal *WAL) getLastEntryInLog() (*WAL_Entry, error) {
+	file, err := os.OpenFile(wal.currentSegment.Name(), os.O_RDONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var previousSize int64
+	var offset int64
+	var entry *WAL_Entry
+
+	for {
+		var size int64
+		if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
+			if err == io.EOF {
+				if offset == 0 {
+					return entry, nil
+				}
+
+				if _, err := file.Seek(offset, io.SeekStart); err != nil {
+					return nil, err
+				}
+
+				data := make([]byte, previousSize)
+				if _, err := io.ReadFull(file, data); err != nil {
+					return nil, err
+				}
+
+				entry, err = unmarshalAndVerify(data)
+				if err != nil {
+					return nil, err
+				}
+
+				return entry, nil
+			}
+			return nil, err
+		}
+
+		// Get current offset
+		offset, err = file.Seek(0, io.SeekCurrent)
+		previousSize = size
+
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err := file.Seek(int64(size), io.SeekCurrent); err != nil {
+			return nil, err
+		}
+	}
 }

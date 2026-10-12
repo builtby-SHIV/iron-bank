@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type WAL struct {
@@ -387,4 +389,113 @@ func (wal *WAL) keepSyncing() {
 			return
 		}
 	}
+}
+
+func (wal *WAL) Repair() ([]*WAL_Entry, error) {
+	files, err := filepath.Glob(filepath.Join(wal.directory, segmentPrefix+"*"))
+	if err != nil {
+		return nil, err
+	}
+
+	var lastSegmentID int64
+	if len(files) > 0 {
+		lastSegmentID, err = findLastSegmentIndexinFiles(files)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		log.Fatalf("No log segments found, nothing to repair.")
+	}
+	filePath := filepath.Join(wal.directory, fmt.Sprintf("%s%d", segmentPrefix, lastSegmentID))
+	file, err := os.OpenFile(filePath, os.O_RDONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	defer file.Close()
+
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	var entries []*WAL_Entry
+
+	for {
+		var size int64
+		if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
+			if err == io.EOF {
+				return entries, err
+			}
+			log.Printf("Error while reading entry size: %v", err)
+			if err := wal.replaceWithFixedFile(entries); err != nil {
+				return entries, err
+			}
+			return nil, nil
+		}
+
+		data := make([]byte, size)
+		if _, err := io.ReadFull(file, data); err != nil {
+			if err := wal.replaceWithFixedFile(entries); err != nil {
+				return entries, err
+			}
+			return entries, nil
+		}
+
+		var entry WAL_Entry
+		if err := proto.Unmarshal(data, &entry); err != nil {
+			if err := wal.replaceWithFixedFile(entries); err != nil {
+				return entries, err
+			}
+			return entries, nil
+		}
+
+		if !verifyCRC(&entry) {
+			log.Printf("CRC mismatch: data may be corrupted")
+			if err := wal.replaceWithFixedFile(entries); err != nil {
+				return entries, err
+			}
+
+			return entries, nil
+		}
+
+		entries = append(entries, &entry)
+	}
+}
+
+func (wal *WAL) replaceWithFixedFile(entries []*WAL_Entry) error {
+	tempFilePath := fmt.Sprintf("%s.tmp", wal.currentSegment.Name())
+	tempFile, err := os.OpenFile(tempFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		marshaledEntry := MustMarshal(entry)
+
+		size := int32(len(marshaledEntry))
+		if err := binary.Write(tempFile, binary.LittleEndian, size); err != nil {
+			return err
+		}
+		_, err := tempFile.Write(marshaledEntry)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tempFilePath, wal.currentSegment.Name()); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func verifyCRC(entry *WAL_Entry) bool {
+	actualCRC := crc32.ChecksumIEEE(append(entry.GetData(), byte(entry.GetLogSequenceNumber())))
+
+	return entry.CRC == actualCRC
 }

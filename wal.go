@@ -137,7 +137,27 @@ func (w *WAL) writeEntry(data []byte) error {
 	}
 
 	w.lastSequenceNo += 1
-	w.writeToBuffer(data)
+	return w.writeToBuffer(data)
+}
+
+func (w *WAL) writeToBuffer(data []byte) error {
+	entry := &WAL_Entry{
+		LogSequenceNumber: w.lastSequenceNo,
+		Data: data,
+		CRC: crc32.ChecksumIEEE(append(data, byte(w.lastSequenceNo))),
+	}
+
+	marshaledEntry := MustMarshal(entry)
+	size := int64(len(marshaledEntry))
+	if err := binary.Write(w.bufWriter, binary.LittleEndian, size); err != nil {
+		return err
+	}
+
+	if _, err := w.bufWriter.Write(marshaledEntry); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (wal *WAL) getLastSequenceNo() (uint64, error) {

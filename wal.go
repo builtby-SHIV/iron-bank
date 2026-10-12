@@ -175,6 +175,28 @@ func (w *WAL) rotateIfNeeded() error {
 	return nil
 }
 
+func (w *WAL) roatateLog() error {
+	if err := w.sync(); err != nil {
+		return err
+	}
+
+	w.currentSegmentIndex += 1
+	if w.currentSegmentIndex > w.maxSegments {
+		if err := w.deleteOldestSegment(); err != nil {
+			return err
+		}
+	}
+
+	newFile, err := createSegmentFile(w.directory, int(w.currentSegmentIndex))
+	if err != nil {
+		return err
+	}
+	w.currentSegment = newFile
+	w.bufWriter = bufio.NewWriter(newFile)
+
+	return  nil
+}
+
 func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	entry, err := wal.getLastEntryInLog()
 	if err != nil {

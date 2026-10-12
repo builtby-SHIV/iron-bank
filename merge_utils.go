@@ -79,7 +79,7 @@ func mergeRanges(ranges [][]*LSMEntry) []KVPair {
 			iter = iter.Next()
 			continue
 		}
-		results = append(results, KVPair{key: entry.entry.Key, val: string(entry.entry.Value)})
+		results = append(results, KVPair{Key: entry.entry.Key, Val: string(entry.entry.Value)})
 		iter = iter.Next()
 	}
 

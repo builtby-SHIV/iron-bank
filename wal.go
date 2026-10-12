@@ -313,7 +313,7 @@ func (w *WAL) readAll() ([]*WAL_Entry, error) {
 	return entries, nil
 }
 
-func (w *WAL) readAllFromOffset(offset int, readFromCheckpoint bool) ([]*WAL_Entry, error) {
+func (w *WAL) readAllFromOffset(offset int) ([]*WAL_Entry, error) {
 	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
 	if err != nil {
 		return nil, err

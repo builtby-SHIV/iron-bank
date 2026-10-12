@@ -35,7 +35,7 @@ type level struct {
 }
 
 type KVPair struct {
-	key, val string
+	Key, Val string
 }
 
 type LSMTree struct {
@@ -100,6 +100,25 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 	}
 
 	return lsm, nil
+}
+
+func (l *LSMTree) Close() error {
+	l.mu.Lock()
+	l.flushingQueueMu.Lock()
+	l.flushingQueue = append(l.flushingQueue, l.memtable)
+	l.flushingQueueMu.Unlock()
+
+	l.flushingChan <- l.memtable
+	l.memtable = NewMemTable()
+
+	l.mu.Unlock()
+
+	l.cancel()
+	l.wg.Wait()
+	l.wal.Close()
+	close(l.flushingChan)
+	close(l.compactionChan)
+	return nil
 }
 
 func (l *LSMTree) backgroundCompaction() error {
@@ -312,6 +331,21 @@ func (l *LSMTree) GET(key string) (string, error) {
 func (l *LSMTree) DELETE(key string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	val, err := l.GET(key)
+	if err != nil {
+		return err
+	}
+
+	if !l.inRecovery {
+		l.wal.writeEntry(MustMarshal(&WAL_Entry{
+			LogSequenceNumber: l.wal.lastSequenceNo,
+			Key: key,
+			Value: []byte(val),
+			Command:   Command_PUT,
+			CRC: crc32.ChecksumIEEE(append([]byte(val), byte(l.wal.lastSequenceNo))),
+		}))
+	}
 	
 	l.memtable.Del(key)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
@@ -481,13 +515,13 @@ func (l *LSMTree) recoverFromWAL() error {
 }
 
 func (l *LSMTree) readEntriesFromWAL() ([]*WAL_Entry, error) {
-	entries, err := l.wal.readAllFromOffset(-1, true)
+	entries, err := l.wal.readAllFromOffset(-1)
 	if err != nil {
 		_, err = l.wal.Repair()
 		if err != nil {
 			return nil, err
 		}
-		entries, err = l.wal.readAllFromOffset(-1, true)
+		entries, err = l.wal.readAllFromOffset(-1)
 		if err != nil {
 			return nil, err
 		}

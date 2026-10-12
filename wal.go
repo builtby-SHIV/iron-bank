@@ -292,6 +292,67 @@ func (w *WAL) readAllEntries(file *os.File) ([]*WAL_Entry, error) {
 	return entries, nil
 } 
 
+func unmarshalAndVerify(data []byte) (*WAL_Entry, error) {
+	var entry WAL_Entry
+	MustUnmarshal(data, &entry)
+
+	actualCRC := crc32.ChecksumIEEE(append(entry.GetData(), byte(entry.GetLogSequenceNumber())))
+	if actualCRC != entry.CRC {
+		return nil, fmt.Errorf("CRC mismatch, data might be corrupted")
+	}
+	return &entry, nil
+}
+
+func (w *WAL) readAll() ([]*WAL_Entry, error) {
+	file, err := os.OpenFile(w.currentSegment.Name(), os.O_RDONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	entries, err := w.readAllEntries(file)
+	if err != nil {
+		return  nil, err
+	}
+
+	return entries, nil
+}
+
+func (w *WAL) readAllFromOffset(offset int, readFromCheckpoint bool) ([]*WAL_Entry, error) {
+	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []*WAL_Entry
+
+	for _, file := range files {
+		segmentIndex, err := strconv.Atoi(strings.TrimPrefix(file,
+			filepath.Join(w.directory, "segment-")))
+		if err != nil {
+			return entries, err
+		}
+
+		if segmentIndex < offset {
+			continue
+		}
+
+		file, err := os.OpenFile(file, os.O_RDONLY, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		entries_from_segment, err := w.readAllEntries(file)
+		if err != nil {
+			return entries, err
+		}
+
+		entries = append(entries, entries_from_segment...)
+	}
+
+	return entries, nil
+}
+
 func (wal *WAL) sync() error {
 	if err := wal.bufWriter.Flush(); err != nil {
 		return err

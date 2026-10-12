@@ -10,6 +10,7 @@ import (
 	"internal/strconv"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,6 +181,10 @@ func (w *WAL) roatateLog() error {
 		return err
 	}
 
+	if err := w.currentSegment.Close(); err != nil {
+		return err
+	}
+
 	w.currentSegmentIndex += 1
 	if w.currentSegmentIndex > w.maxSegments {
 		if err := w.deleteOldestSegment(); err != nil {
@@ -195,6 +200,47 @@ func (w *WAL) roatateLog() error {
 	w.bufWriter = bufio.NewWriter(newFile)
 
 	return  nil
+}
+
+func (w *WAL) deleteOldestSegment() error {
+	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
+	if err != nil {
+		return err
+	}
+
+	var oldestSegmentFilePath string
+	if len(files) > 0 {
+		oldestSegmentFilePath, err = w.findOldestSegmentFile(files)
+		if err != nil {
+			return err
+		}
+	} else {
+		return nil
+	}
+
+	if err := os.Remove(oldestSegmentFilePath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *WAL) findOldestSegmentFile(files []string) (string, error) {
+	var oldestSegment string
+	oldestSegmentID := math.MaxInt64
+
+	for _, file := range files {
+		segmentID, err := strconv.Atoi(strings.TrimPrefix(file, filepath.Join(w.directory, segmentPrefix)))
+		if err != nil {
+			return "", err
+		}
+		if segmentID < oldestSegmentID {
+			oldestSegmentID = segmentID
+			oldestSegment = file
+		}
+	}
+
+	return oldestSegment, nil
 }
 
 func (wal *WAL) getLastSequenceNo() (uint64, error) {

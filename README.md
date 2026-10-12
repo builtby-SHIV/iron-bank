@@ -1,5 +1,9 @@
 # 🏦 Iron Bank
 
+<p align="center">
+  <img src="mascot.png" alt="Iron Bank Mascot" width="250">
+</p>
+
 A **Log-Structured Merge-Tree (LSM) based key-value storage engine** written in Go — built from scratch as a learning project, evolving from a simple in-memory hashmap to a full-fledged LSM storage engine with write-ahead logging, SSTables, bloom filters, and multi-level compaction.
 
 ## Why I Built This

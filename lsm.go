@@ -3,7 +3,9 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"slices"
 	"strconv"
@@ -57,7 +59,7 @@ type LSMTree struct {
 func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	wal, err := OpenWal(dir+WALDirectorySuffix, true, 128000, 1000)
+	wal, err := OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		cancel()
 		return  nil, err
@@ -239,6 +241,16 @@ func (l *LSMTree) PUT(key string, val []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	
+	if !l.inRecovery {
+		l.wal.writeEntry(MustMarshal(&WAL_Entry{
+			LogSequenceNumber: l.wal.lastSequenceNo,
+			Key: key,
+			Value: val,
+			Command:   Command_PUT,
+			CRC: crc32.ChecksumIEEE(append(val, byte(l.wal.lastSequenceNo))),
+		}))
+	}
+
 	l.memtable.Put(key, val)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
 		l.flushingQueueMu.Lock()
@@ -297,7 +309,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 	return "", nil
 }
 
-func (l *LSMTree) DELETE(key, val string) error {
+func (l *LSMTree) DELETE(key string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	
@@ -447,4 +459,51 @@ func (l *LSMTree) initializeCurrentSequenceNumber() error {
 	atomic.StoreUint64(&l.current_sst_sequence, maxSequence)
 
 	return nil
+}
+
+func (l *LSMTree) recoverFromWAL() error {
+	l.inRecovery = true
+	defer func() {
+		l.inRecovery = false
+	}()
+	entries, err := l.wal.readAll()
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if err := l.processWALEntry(entry); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (l *LSMTree) readEntriesFromWAL() ([]*WAL_Entry, error) {
+	entries, err := l.wal.readAllFromOffset(-1, true)
+	if err != nil {
+		_, err = l.wal.Repair()
+		if err != nil {
+			return nil, err
+		}
+		entries, err = l.wal.readAllFromOffset(-1, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+func (l *LSMTree) processWALEntry(entry *WAL_Entry) error {
+
+	switch entry.Command {
+	case Command_PUT:
+		return l.PUT(entry.Key, entry.Value)
+	case Command_DELETE:
+		return l.DELETE(entry.Key)
+	case Command_WRITE_SST:
+		return errors.New("unexpected write sst command in WAL")
+	default:
+		return errors.New("unknown command in WAL")
+	}
 }

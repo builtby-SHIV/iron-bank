@@ -30,6 +30,8 @@ enum Command {
 
 message WAL_Entry {
     uint64   logSequenceNumber = 1;
-    bytes   data = 2;
-    uint32  CRC = 3;
+    string key = 2;
+    optional bytes value = 3;
+    uint32  CRC = 4;
+    Command command = 5;
 }

@@ -144,19 +144,12 @@ func (w *WAL) writeEntry(data []byte) error {
 }
 
 func (w *WAL) writeToBuffer(data []byte) error {
-	entry := &WAL_Entry{
-		LogSequenceNumber: w.lastSequenceNo,
-		Data: data,
-		CRC: crc32.ChecksumIEEE(append(data, byte(w.lastSequenceNo))),
-	}
-
-	marshaledEntry := MustMarshal(entry)
-	size := int64(len(marshaledEntry))
+	size := int64(len(data))
 	if err := binary.Write(w.bufWriter, binary.LittleEndian, size); err != nil {
 		return err
 	}
 
-	if _, err := w.bufWriter.Write(marshaledEntry); err != nil {
+	if _, err := w.bufWriter.Write(data); err != nil {
 		return err
 	}
 
@@ -298,7 +291,7 @@ func unmarshalAndVerify(data []byte) (*WAL_Entry, error) {
 	var entry WAL_Entry
 	MustUnmarshal(data, &entry)
 
-	actualCRC := crc32.ChecksumIEEE(append(entry.GetData(), byte(entry.GetLogSequenceNumber())))
+	actualCRC := crc32.ChecksumIEEE(append(entry.GetValue(), byte(entry.GetLogSequenceNumber())))
 	if actualCRC != entry.CRC {
 		return nil, fmt.Errorf("CRC mismatch, data might be corrupted")
 	}
@@ -472,7 +465,7 @@ func (wal *WAL) replaceWithFixedFile(entries []*WAL_Entry) error {
 	for _, entry := range entries {
 		marshaledEntry := MustMarshal(entry)
 
-		size := int32(len(marshaledEntry))
+		size := int64(len(marshaledEntry))
 		if err := binary.Write(tempFile, binary.LittleEndian, size); err != nil {
 			return err
 		}
@@ -495,7 +488,7 @@ func (wal *WAL) replaceWithFixedFile(entries []*WAL_Entry) error {
 }
 
 func verifyCRC(entry *WAL_Entry) bool {
-	actualCRC := crc32.ChecksumIEEE(append(entry.GetData(), byte(entry.GetLogSequenceNumber())))
+	actualCRC := crc32.ChecksumIEEE(append(entry.GetValue(), byte(entry.GetLogSequenceNumber())))
 
 	return entry.CRC == actualCRC
 }
@@ -538,7 +531,6 @@ func (wal *WAL) getLastEntryInLog() (*WAL_Entry, error) {
 			return nil, err
 		}
 
-		// Get current offset
 		offset, err = file.Seek(0, io.SeekCurrent)
 		previousSize = size
 

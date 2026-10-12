@@ -289,8 +289,10 @@ func (x *LSMEntry) GetTimestamp() int64 {
 type WAL_Entry struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	LogSequenceNumber uint64                 `protobuf:"varint,1,opt,name=logSequenceNumber,proto3" json:"logSequenceNumber,omitempty"`
-	Data              []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
-	CRC               uint32                 `protobuf:"varint,3,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Key               string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value             []byte                 `protobuf:"bytes,3,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	CRC               uint32                 `protobuf:"varint,4,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Command           Command                `protobuf:"varint,5,opt,name=command,proto3,enum=Command" json:"command,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -332,9 +334,16 @@ func (x *WAL_Entry) GetLogSequenceNumber() uint64 {
 	return 0
 }
 
-func (x *WAL_Entry) GetData() []byte {
+func (x *WAL_Entry) GetKey() string {
 	if x != nil {
-		return x.Data
+		return x.Key
+	}
+	return ""
+}
+
+func (x *WAL_Entry) GetValue() []byte {
+	if x != nil {
+		return x.Value
 	}
 	return nil
 }
@@ -344,6 +353,13 @@ func (x *WAL_Entry) GetCRC() uint32 {
 		return x.CRC
 	}
 	return 0
+}
+
+func (x *WAL_Entry) GetCommand() Command {
+	if x != nil {
+		return x.Command
+	}
+	return Command_PUT
 }
 
 var File_serialization_proto protoreflect.FileDescriptor
@@ -365,11 +381,14 @@ const file_serialization_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\x0e2\b.CommandR\acommand\x12\x19\n" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
-	"\x06_value\"_\n" +
+	"\x06_value\"\xa6\x01\n" +
 	"\tWAL_Entry\x12,\n" +
-	"\x11logSequenceNumber\x18\x01 \x01(\x04R\x11logSequenceNumber\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
-	"\x03CRC\x18\x03 \x01(\rR\x03CRC*-\n" +
+	"\x11logSequenceNumber\x18\x01 \x01(\x04R\x11logSequenceNumber\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
+	"\x03CRC\x18\x04 \x01(\rR\x03CRC\x12\"\n" +
+	"\acommand\x18\x05 \x01(\x0e2\b.CommandR\acommandB\b\n" +
+	"\x06_value*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
@@ -401,11 +420,12 @@ var file_serialization_proto_goTypes = []any{
 var file_serialization_proto_depIdxs = []int32{
 	2, // 0: Index.entries:type_name -> IndexEntry
 	0, // 1: LSMEntry.command:type_name -> Command
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 2: WAL_Entry.command:type_name -> Command
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_serialization_proto_init() }
@@ -414,6 +434,7 @@ func file_serialization_proto_init() {
 		return
 	}
 	file_serialization_proto_msgTypes[3].OneofWrappers = []any{}
+	file_serialization_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

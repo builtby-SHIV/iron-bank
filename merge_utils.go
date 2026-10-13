@@ -2,14 +2,12 @@ package main
 
 import (
 	"container/heap"
-
-	"github.com/huandu/skiplist"
 )
 
 type heapEntry struct {
 	entry     *LSMEntry
-	listIndex int 
-	idx       int 
+	listIndex int
+	idx       int
 	iterator  *SSTableIterator
 }
 
@@ -20,7 +18,13 @@ func (h mergeHeap) Len() int {
 }
 
 func (h mergeHeap) Less(i, j int) bool {
-	return h[i].entry.Timestamp < h[j].entry.Timestamp
+	if h[i].entry.Key != h[j].entry.Key {
+		return h[i].entry.Key < h[j].entry.Key
+	}
+	if h[i].entry.Timestamp != h[j].entry.Timestamp {
+		return h[i].entry.Timestamp > h[j].entry.Timestamp // newer timestamp wins
+	}
+	return h[i].listIndex > h[j].listIndex // higher list index (newer SSTable) wins
 }
 
 func (h mergeHeap) Swap(i, j int) {
@@ -39,13 +43,41 @@ func (h *mergeHeap) Pop() interface{} {
 	return x
 }
 
+type rangeMergeHeap []heapEntry
+
+func (h rangeMergeHeap) Len() int {
+	return len(h)
+}
+
+func (h rangeMergeHeap) Less(i, j int) bool {
+	if h[i].entry.Key != h[j].entry.Key {
+		return h[i].entry.Key < h[j].entry.Key
+	}
+	if h[i].entry.Timestamp != h[j].entry.Timestamp {
+		return h[i].entry.Timestamp > h[j].entry.Timestamp
+	}
+	return h[i].listIndex < h[j].listIndex // lower listIndex (memtable / newer queue) wins
+}
+
+func (h rangeMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *rangeMergeHeap) Push(x interface{}) {
+	*h = append(*h, x.(heapEntry))
+}
+
+func (h *rangeMergeHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 func mergeRanges(ranges [][]*LSMEntry) []KVPair {
-	minHeap := &mergeHeap{}
+	minHeap := &rangeMergeHeap{}
 	heap.Init(minHeap)
-
-	var results []KVPair
-
-	seen := skiplist.New(skiplist.String)
 
 	for i, entries := range ranges {
 		if len(entries) > 0 {
@@ -53,81 +85,69 @@ func mergeRanges(ranges [][]*LSMEntry) []KVPair {
 		}
 	}
 
+	var results []KVPair
+
 	for minHeap.Len() > 0 {
-		minEntry := heap.Pop(minHeap).(heapEntry)
-		previousValue := seen.Get(minEntry.entry.Key)
+		top := heap.Pop(minHeap).(heapEntry)
+		currentKey := top.entry.Key
+		winner := top.entry
 
-		if previousValue != nil {
+		if top.idx+1 < len(ranges[top.listIndex]) {
+			nextEntry := ranges[top.listIndex][top.idx+1]
+			heap.Push(minHeap, heapEntry{entry: nextEntry, listIndex: top.listIndex, idx: top.idx + 1})
+		}
 
-			if previousValue.Value.(heapEntry).entry.Timestamp < minEntry.entry.Timestamp {
-				seen.Set(minEntry.entry.Key, minEntry)
+		for minHeap.Len() > 0 && (*minHeap)[0].entry.Key == currentKey {
+			dup := heap.Pop(minHeap).(heapEntry)
+			if dup.entry.Timestamp > winner.Timestamp {
+				winner = dup.entry
 			}
-		} else {
-			seen.Set(minEntry.entry.Key, minEntry)
+			if dup.idx+1 < len(ranges[dup.listIndex]) {
+				nextEntry := ranges[dup.listIndex][dup.idx+1]
+				heap.Push(minHeap, heapEntry{entry: nextEntry, listIndex: dup.listIndex, idx: dup.idx + 1})
+			}
 		}
 
-		if minEntry.idx+1 < len(ranges[minEntry.listIndex]) {
-			nextEntry := ranges[minEntry.listIndex][minEntry.idx+1]
-			heap.Push(minHeap, heapEntry{entry: nextEntry, listIndex: minEntry.listIndex, idx: minEntry.idx + 1})
-		}
-	}
-
-	iter := seen.Front()
-	for iter != nil {
-		entry := iter.Value.(heapEntry)
-		if entry.entry.Command == Command_DELETE {
-			iter = iter.Next()
-			continue
-		}
-		results = append(results, KVPair{Key: entry.entry.Key, Val: string(entry.entry.Value)})
-		iter = iter.Next()
+		results = append(results, KVPair{Key: winner.Key, Val: string(winner.Value)})
 	}
 
 	return results
 }
 
-func mergeIterators(iterators []*SSTableIterator) []*LSMEntry {
+func mergeIterators(iterators []*SSTableIterator, dropTombstones bool) []*LSMEntry {
 	minHeap := &mergeHeap{}
 	heap.Init(minHeap)
 
+	for i, iterator := range iterators {
+		if iterator == nil || iterator.value == nil {
+			continue
+		}
+		heap.Push(minHeap, heapEntry{entry: iterator.value, iterator: iterator, listIndex: i})
+	}
+
 	var results []*LSMEntry
 
-	seen := skiplist.New(skiplist.String)
-
-	for _, iterator := range iterators {
-		if iterator == nil {
-			continue
-		}
-		heap.Push(minHeap, heapEntry{entry: iterator.value, iterator: iterator})
-	}
-
 	for minHeap.Len() > 0 {
-		minEntry := heap.Pop(minHeap).(heapEntry)
-		previousValue := seen.Get(minEntry.entry.Key)
+		top := heap.Pop(minHeap).(heapEntry)
+		currentKey := top.entry.Key
+		winner := top.entry
 
-		if previousValue != nil {
-			if previousValue.Value.(heapEntry).entry.Timestamp < minEntry.entry.Timestamp {
-				seen.Set(minEntry.entry.Key, minEntry)
+		if top.iterator.Next() != nil {
+			heap.Push(minHeap, heapEntry{entry: top.iterator.value, iterator: top.iterator, listIndex: top.listIndex})
+		}
+
+		// Drain duplicates for the same key
+		for minHeap.Len() > 0 && (*minHeap)[0].entry.Key == currentKey {
+			dup := heap.Pop(minHeap).(heapEntry)
+			if dup.entry.Timestamp > winner.Timestamp {
+				winner = dup.entry
 			}
-		} else {
-			seen.Set(minEntry.entry.Key, minEntry)
+			if dup.iterator.Next() != nil {
+				heap.Push(minHeap, heapEntry{entry: dup.iterator.value, iterator: dup.iterator, listIndex: dup.listIndex})
+			}
 		}
 
-		if minEntry.iterator.Next() != nil {
-			nextEntry := minEntry.iterator.value
-			heap.Push(minHeap, heapEntry{entry: nextEntry, iterator: minEntry.iterator})
-		}
-	}
-
-	iter := seen.Front()
-	for iter != nil {
-		entry := iter.Value.(heapEntry)
-		if entry.entry.Command == Command_DELETE {
-			iter = iter.Next()
-			continue
-		}
-		results = append(results, entry.entry)
-		iter = iter.Next()
+		results = append(results, winner)
 	}
 
 	return results

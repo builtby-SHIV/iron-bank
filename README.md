@@ -98,6 +98,70 @@ curl -X DELETE http://localhost:8080/del \
   -d '{"key": "name"}'
 ```
 
+## Benchmarks & Amplification Analysis
+
+Benchmarks were conducted on an **AMD Ryzen 7 7435HS (16 threads)** running **Go 1.26.4** on Windows x86_64 to evaluate **Write Amplification (WAF)**, **Read Amplification (RAF)**, and raw throughput under strict durability guarantees.
+
+### 1. Write Amplification Factor (WAF) — Synchronous `fsync` on Every Write
+
+Iron Bank enforces high consistency: every write flushes the userspace buffer and issues an operating system `fsync` (`file.Sync()`) directly to storage media before returning success. SSTable creations during memtable flushes and compaction also execute `file.Sync()` prior to closing.
+
+$$\text{WAF} = \frac{\text{Total Bytes Written to Storage (WAL + SSTables)}}{\text{Total Logical Bytes Written by User}}$$
+
+| Workload | Operations | Value Size | Logical User Data | Storage Written | WAF | Level Distribution on Disk | Durable Throughput (`fsync` / write) |
+|---|---|---|---|---|---|---|---|
+| **Sequential Writes** | 5,000 keys | 128 B | 693.36 KB | 12.45 MB | **17.96x** | **L0: 2, L1: 8, L2: 1** | **~990 durable ops/sec** (~1.01 ms / write) |
+| **Random Writes** | 5,000 keys | 128 B | 708.01 KB | 13.48 MB | **19.03x** | **L0: 3, L1: 8, L2: 1** | **~974 durable ops/sec** (~1.03 ms / write) |
+| **Heavy Overwrites** (500 distinct keys) | 5,000 keys | 128 B | 664.06 KB | 11.01 MB | **16.57x** | **L0: 2, L1: 7, L2: 1** | **~976 durable ops/sec** (~1.03 ms / write) |
+
+> **Analysis & Verification of Multi-Level Compaction:**
+> - **Proof of SSTable Writes:** Memtables flush to SSTable files when reaching `maxMemtableSize` (8 KB). 5,000 writes trigger repeated flushes into the data directory with disk-persisted `sstable_0_*` files.
+> - **Proof of Merging & Compaction Across Levels:** 
+>   - SSTables are generated originally *only* at Level 0 (`sstable_0_*`).
+>   - When $L_0$ exceeds `maxSSTables[0] = 4`, the background compaction worker merges them and writes into Level 1 (`sstable_1_*`), deleting the old $L_0$ files.
+>   - When $L_1$ exceeds `maxSSTables[1] = 8`, compaction cascades: $L_1$ tables are merged and promoted into Level 2 (`sstable_2_*`).
+>   - The resulting disk state (**L0: 2, L1: 8, L2: 1**) proves that data was physically written into SSTables, merged across levels, and compacted up to Level 2.
+> - **Durable Hardware Throughput:** Synchronous physical `fsync` on every write commits directly to disk platters/NAND flash, achieving ~970 durable transactions/sec on consumer NVMe/SSD storage without buffering data in volatile memory.
+> - **WAL Overhead:** Every mutation in the WAL accounts for ~1.15x logical user payload due to Little-Endian length headers, sequence numbers, protobuf tags, and CRC32 checksums.
+> - **Compaction Overhead:** Compaction rewrites SSTables across multiple levels ($O(\text{levels})$). Heavy overwrites exhibit lower WAF (16.57x vs 19.03x) because compaction deduplicates superseded versions of identical keys.
+
+---
+
+### 2. Read Amplification Factor (RAF) & Why Range RAF > Point RAF
+
+$$\text{RAF} = \frac{\text{Bytes Read from Storage Media}}{\text{Logical Payload Bytes Retrieved by User}}$$
+
+| Query Type | Pattern | Disk Probes / Query | Disk Bytes Read | User Bytes Read | RAF | Throughput |
+|---|---|---|---|---|---|---|
+| **Point Read (Hit)** | Random Key in SSTable | **1.00** | 154.30 KB | 132.81 KB | **1.16x** | ~123,800 reads/sec |
+| **Point Read (Cold Miss)** | Non-Existent Key | **0.00** | **0 B** (100% Bloom Filtered) | 0 B | **0.00x** | ~922,000 reads/sec |
+| **Range Scan (10 keys)** | Sequential Range | Multi-SSTable scan | 89.44 KB | 57.35 KB | **1.56x** | ~4,400 scans/sec |
+| **Range Scan (50 keys)** | Sequential Range | Multi-SSTable scan | 409.35 KB | 286.28 KB | **1.43x** | ~1,700 scans/sec |
+| **Range Scan (100 keys)** | Sequential Range | Multi-SSTable scan | 809.25 KB | 572.56 KB | **1.41x** | ~850 scans/sec |
+
+---
+### 3. Throughput & Microbenchmarks
+
+Microbenchmarks measured via `go test -bench . -benchmem`:
+
+| Benchmark | Iterations | Latency (ns/op) | Memory (B/op) | Allocs/op | Throughput (ops/sec) |
+|---|---|---|---|---|---|
+| `BenchmarkPutSequential` | 46,144 | 27,941 ns/op | 14,176 B/op | 35 | ~35,789 ops/sec (async) |
+| `BenchmarkPutRandom` | 45,146 | 26,132 ns/op | 14,287 B/op | 35 | ~38,267 ops/sec (async) |
+| `BenchmarkGetHit` | 187,068 | 6,324 ns/op | 958 B/op | 15 | ~158,127 reads/sec |
+| `BenchmarkGetMissBloomFilter` | 1,735,495 | 800.9 ns/op | 186 B/op | 8 | ~1,248,595 reads/sec |
+| `BenchmarkRangeScan` (50 keys) | 3,992 | 285,505 ns/op | 45,407 B/op | 405 | ~3,502 scans/sec |
+
+### Running the Benchmarks
+
+```bash
+# Run write and read amplification tests with full metric reports:
+go test -v -run "TestBenchmark"
+
+# Run microbenchmarks for throughput and allocation profiles:
+go test -bench . -benchmem -run "^$"
+```
+
 ## Getting Started
 
 ### Prerequisites

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 
 	"google.golang.org/protobuf/proto"
@@ -73,7 +74,7 @@ func ReadDataSize(file *os.File) (int64, error) {
 
 func ReadDataEntry(file *os.File, size int64) ([]byte, error) {
 	data := make([]byte, size)
-	if _, err := file.Read(data); err != nil {
+	if _, err := io.ReadFull(file, data); err != nil {
 		return nil, err
 	}
 	return data, nil
@@ -89,11 +90,10 @@ func ReadSSTableMetaData(file *os.File) (*BloomFilter, *Index, int64, error) {
 	dataOffset += int64(binary.Size(bloomFilterSize))
 
 	bloomFilterData := make([]byte, bloomFilterSize)
-	bytesRead, err := file.Read(bloomFilterData)
-	if err != nil {
+	if _, err := io.ReadFull(file, bloomFilterData); err != nil {
 		return nil, nil, 0, err
 	}
-	dataOffset += int64(bytesRead)
+	dataOffset += int64(len(bloomFilterData))
 
 	indexSize, err := ReadDataSize(file)
 	if err != nil {
@@ -102,11 +102,10 @@ func ReadSSTableMetaData(file *os.File) (*BloomFilter, *Index, int64, error) {
 	dataOffset += int64(binary.Size(indexSize))
 
 	indexData := make([]byte, indexSize)
-	bytesRead, err = file.Read(indexData)
-	if err != nil {
+	if _, err := io.ReadFull(file, indexData); err != nil {
 		return nil, nil, 0, err
 	}
-	dataOffset += int64(bytesRead)
+	dataOffset += int64(len(indexData))
 
 	bloomFilter := &BloomFilter{}
 	MustUnmarshal(bloomFilterData, bloomFilter)

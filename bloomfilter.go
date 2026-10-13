@@ -11,6 +11,9 @@ func NewBloomFilter(size int64) *BloomFilter {
 }
 
 func (bf *BloomFilter) Add(item []byte) {
+	if bf == nil || bf.Size <= 0 || len(bf.BitSet) == 0 {
+		return
+	}
 	h1 := murmur3.Sum64(item)
 	h2 := murmur3.Sum64WithSeed(item, 1)
 	h3 := murmur3.Sum64WithSeed(item, 2)
@@ -21,6 +24,9 @@ func (bf *BloomFilter) Add(item []byte) {
 }
 
 func (bf *BloomFilter) Test(item []byte) bool {
+	if bf == nil || bf.Size <= 0 || len(bf.BitSet) == 0 {
+		return true
+	}
 	h1 := murmur3.Sum64(item)
 	h2 := murmur3.Sum64WithSeed(item, 1)
 	h3 := murmur3.Sum64WithSeed(item, 2)

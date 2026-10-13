@@ -11,30 +11,51 @@ type Memtable struct {
 	size int64
 }
 
-func NewMemTable() *Memtable{
+func NewMemTable() *Memtable {
 	return &Memtable{
 		data: *skiplist.New(skiplist.String),
 		size: 0,
 	}
 }
 
+func NewMemtable() *Memtable {
+	return NewMemTable()
+}
+
+func (m *Memtable) Clear() {
+	m.data = *skiplist.New(skiplist.String)
+	m.size = 0
+}
+
+func (m *Memtable) Len() int {
+	return m.data.Len()
+}
+
+func (m *Memtable) Delete(key string) {
+	m.Del(key)
+}
+
+func (m *Memtable) SizeInBytes() int64 {
+	return m.SizeInbytes()
+}
+
 func (m *Memtable) Put(key string, val []byte) {
-	sizeChange := int64(len(key))
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		m.size += int64(len(keyExists.Value.(*LSMEntry).Value))
+		oldEntry := keyExists.Value.(*LSMEntry)
+		m.size += int64(len(val)) - int64(len(oldEntry.Value))
 	} else {
-		sizeChange += int64(len(val))
+		m.size += int64(len(key)) + int64(len(val))
 	}
 	entry := getLSMEntry(key, &val, Command_PUT)
 	m.data.Set(key, entry)
-	m.size += sizeChange
 }
 
 func (m *Memtable) Del(key string) {
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		m.size += int64(len(keyExists.Value.(*LSMEntry).Value))
+		oldEntry := keyExists.Value.(*LSMEntry)
+		m.size -= int64(len(oldEntry.Value))
 	} else {
 		m.size += int64(len(key))
 	}
@@ -49,18 +70,18 @@ func (m *Memtable) Get(key string) *LSMEntry {
 	return nil
 }
 
-func (m *Memtable) RangeScan(start, end string) [] *LSMEntry {
-	var results [] *LSMEntry
+func (m *Memtable) RangeScan(start, end string) []*LSMEntry {
+	var results []*LSMEntry
 	iter := m.data.Find(start)
 	for iter != nil {
-		if iter.Element().Key().(string) > end {
+		if iter.Key().(string) > end {
 			break
 		}
 
 		results = append(results, iter.Value.(*LSMEntry))
 		iter = iter.Next()
 	}
-	return  results
+	return results
 }
 
 func (m *Memtable) SizeInbytes() int64 {

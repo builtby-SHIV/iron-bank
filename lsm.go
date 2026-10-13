@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -26,7 +27,7 @@ var maxSSTables = map[int]int{
 const (
 	SSTableFilePrefix  = "sstable_"
 	WALDirectorySuffix = "_wal"
-	maxLevel = 6
+	maxLevel           = 7
 )
 
 type level struct {
@@ -40,20 +41,21 @@ type KVPair struct {
 
 type LSMTree struct {
 	memtable             *Memtable
-	mu                   sync.RWMutex   
-	maxMemtableSize      int64          
-	directory            string         
-	wal                  *WAL        
-	inRecovery           bool           
-	levels               []*level       
-	current_sst_sequence uint64         
-	compactionChan       chan int       
-	flushingQueue        []*Memtable    
-	flushingQueueMu      sync.RWMutex   
-	flushingChan         chan *Memtable 
+	mu                   sync.RWMutex
+	maxMemtableSize      int64
+	directory            string
+	wal                  *WAL
+	inRecovery           bool
+	levels               []*level
+	current_sst_sequence uint64
+	compactionChan       chan int
+	flushingQueue        []*Memtable
+	flushingQueueMu      sync.RWMutex
+	flushingChan         chan *Memtable
 	ctx                  context.Context
 	cancel               context.CancelFunc
-	wg                   sync.WaitGroup
+	flushingWg           sync.WaitGroup
+	compactionWg         sync.WaitGroup
 }
 
 func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, error) {
@@ -62,7 +64,7 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 	wal, err := OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		cancel()
-		return  nil, err
+		return nil, err
 	}
 
 	levels := make([]*level, maxLevel)
@@ -86,15 +88,20 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 	}
 
 	if err := lsm.loadSSTables(); err != nil {
+		_ = wal.Close()
+		cancel()
 		return nil, err
 	}
 
-	lsm.wg.Add(2)
+	lsm.compactionWg.Add(1)
 	go lsm.backgroundCompaction()
+
+	lsm.flushingWg.Add(1)
 	go lsm.backgroundMemTableflushing()
 
 	if recoverFromWAL {
 		if err := lsm.recoverFromWAL(); err != nil {
+			_ = lsm.Close()
 			return nil, err
 		}
 	}
@@ -104,83 +111,130 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 
 func (l *LSMTree) Close() error {
 	l.mu.Lock()
-	l.flushingQueueMu.Lock()
-	l.flushingQueue = append(l.flushingQueue, l.memtable)
-	l.flushingQueueMu.Unlock()
+	if l.memtable != nil && l.memtable.size > 0 {
+		l.flushingQueueMu.Lock()
+		l.flushingQueue = append(l.flushingQueue, l.memtable)
+		l.flushingQueueMu.Unlock()
 
-	l.flushingChan <- l.memtable
-	l.memtable = NewMemTable()
-
+		l.flushingChan <- l.memtable
+		l.memtable = NewMemTable()
+	}
+	close(l.flushingChan)
 	l.mu.Unlock()
 
+	l.flushingWg.Wait()
+
 	l.cancel()
-	l.wg.Wait()
-	l.wal.Close()
-	close(l.flushingChan)
-	close(l.compactionChan)
+	l.compactionWg.Wait()
+
+	if l.wal != nil {
+		_ = l.wal.Close()
+	}
+
+	for _, lvl := range l.levels {
+		lvl.mu.Lock()
+		for _, sst := range lvl.ssTables {
+			if sst != nil {
+				_ = sst.Close()
+			}
+		}
+		lvl.mu.Unlock()
+	}
+
 	return nil
 }
 
-func (l *LSMTree) backgroundCompaction() error {
-	defer l.wg.Done()
+func (l *LSMTree) backgroundCompaction() {
+	defer l.compactionWg.Done()
 	for {
-		select{
-		case <- l.ctx.Done():
-			if readToExit := l.checkAndTriggerCompaction(); readToExit {
-				return nil
+		select {
+		case <-l.ctx.Done():
+			return
+		case compactionCandidate, ok := <-l.compactionChan:
+			if !ok {
+				return
 			}
-		case compactionCandidate := <- l.compactionChan:
-			l.compactLevel(compactionCandidate)
+			_ = l.compactLevel(compactionCandidate)
 		}
 	}
 }
 
 func (l *LSMTree) checkAndTriggerCompaction() bool {
-	var readyToExit bool = true
+	readyToExit := true
 
-	for idx, level := range l.levels {
-		level.mu.RLock()
-		if len(level.ssTables) > maxSSTables[idx] {
-			l.compactionChan <- idx
-			readyToExit = false
+	for idx, lvl := range l.levels {
+		if idx >= maxLevel-1 {
+			continue
 		}
-		level.mu.RUnlock()
+		lvl.mu.RLock()
+		needsCompact := len(lvl.ssTables) > maxSSTables[idx]
+		lvl.mu.RUnlock()
+
+		if needsCompact {
+			readyToExit = false
+			select {
+			case l.compactionChan <- idx:
+			default:
+			}
+		}
 	}
 	return readyToExit
 }
 
 func (l *LSMTree) compactLevel(compactionCandidate int) error {
-	if compactionCandidate == maxLevel - 1 {
+	if compactionCandidate >= maxLevel-1 {
 		return nil
 	}
 
 	l.levels[compactionCandidate].mu.RLock()
-	if len(l.levels[compactionCandidate].ssTables) < maxSSTables[compactionCandidate] {
+	if len(l.levels[compactionCandidate].ssTables) <= maxSSTables[compactionCandidate] {
 		l.levels[compactionCandidate].mu.RUnlock()
 		return nil
 	}
 
-	_, iterators := l.getSSTableHandlesAtLevel(compactionCandidate)
+	sstables, iterators := l.getSSTableHandlesAtLevel(compactionCandidate)
 	l.levels[compactionCandidate].mu.RUnlock()
 
-	mergedSSTable, err := l.mergeSSTables(iterators, compactionCandidate + 1)
+	targetLevel := compactionCandidate + 1
+	mergedSSTable, err := l.mergeSSTables(iterators, targetLevel)
 	if err != nil {
+		for _, it := range iterators {
+			if it != nil {
+				_ = it.Close()
+			}
+		}
 		return err
 	}
 
 	l.levels[compactionCandidate].mu.Lock()
-	l.levels[compactionCandidate + 1].mu.Lock()
+	l.levels[targetLevel].mu.Lock()
 
-	l.deleteSSTableAtLevel(compactionCandidate, iterators)
-	l.addSSTableToLevel(mergedSSTable, compactionCandidate + 1)
+	l.deleteSSTablesAtLevel(compactionCandidate, sstables, iterators)
+	l.levels[targetLevel].ssTables = append(l.levels[targetLevel].ssTables, mergedSSTable)
 
+	checkTarget := len(l.levels[targetLevel].ssTables) > maxSSTables[targetLevel]
+	checkCurrent := len(l.levels[compactionCandidate].ssTables) > maxSSTables[compactionCandidate]
+
+	l.levels[targetLevel].mu.Unlock()
 	l.levels[compactionCandidate].mu.Unlock()
-	l.levels[compactionCandidate + 1].mu.Unlock()
+
+	if checkTarget && targetLevel < maxLevel-1 {
+		select {
+		case l.compactionChan <- targetLevel:
+		default:
+		}
+	}
+	if checkCurrent {
+		select {
+		case l.compactionChan <- compactionCandidate:
+		default:
+		}
+	}
 
 	return nil
 }
 
-func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable, []*SSTableIterator){
+func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable, []*SSTableIterator) {
 	sstables := l.levels[compactionCandidate].ssTables
 	iterators := make([]*SSTableIterator, len(sstables))
 
@@ -192,8 +246,10 @@ func (l *LSMTree) getSSTableHandlesAtLevel(compactionCandidate int) ([]*SSTable,
 }
 
 func (l *LSMTree) mergeSSTables(iterators []*SSTableIterator, targetLevel int) (*SSTable, error) {
-	mergedEntries := mergeIterators(iterators)
+	dropTombstones := targetLevel >= maxLevel-1
+	mergedEntries := mergeIterators(iterators, dropTombstones)
 
+	atomic.AddUint64(&l.current_sst_sequence, 1)
 	sstableFileName := l.getSSTableFileName(targetLevel)
 
 	sst, err := SerializeToSSTable(mergedEntries, sstableFileName)
@@ -203,19 +259,26 @@ func (l *LSMTree) mergeSSTables(iterators []*SSTableIterator, targetLevel int) (
 	return sst, nil
 }
 
-func (l *LSMTree) deleteSSTableAtLevel(level int, iterators []*SSTableIterator) {
-	l.levels[level].ssTables = l.levels[level].ssTables[len(iterators):]
+func (l *LSMTree) deleteSSTablesAtLevel(level int, sstables []*SSTable, iterators []*SSTableIterator) {
 	for _, it := range iterators {
-		_ = it.s.file.Close()
-		if err := os.Remove(it.s.file.Name()); err != nil {
-			panic(err)
+		if it != nil {
+			_ = it.Close()
 		}
 	}
-}
 
-func (l *LSMTree) addSSTableToLevel(sst *SSTable, level int) {
-	l.levels[level].ssTables = append(l.levels[level].ssTables, sst)
-	l.compactionChan <- level
+	if len(l.levels[level].ssTables) >= len(sstables) {
+		l.levels[level].ssTables = l.levels[level].ssTables[len(sstables):]
+	} else {
+		l.levels[level].ssTables = nil
+	}
+
+	for _, sst := range sstables {
+		if sst != nil && sst.file != nil {
+			fileName := sst.file.Name()
+			_ = sst.file.Close()
+			_ = os.Remove(fileName)
+		}
+	}
 }
 
 func (l *LSMTree) loadSSTables() error {
@@ -244,13 +307,18 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 			continue
 		}
 
-		ssTable, err := OpenSSTable(l.directory + "/" + file.Name())
+		fullPath := filepath.Join(l.directory, file.Name())
+		ssTable, err := OpenSSTable(fullPath)
 		if err != nil {
 			return err
 		}
-		
-		level := l.getLevelFromSSTableFileName(ssTable.file.Name())
-		l.levels[level].ssTables = append(l.levels[level].ssTables, ssTable)
+
+		lvl := l.getLevelFromSSTableFileName(file.Name())
+		if lvl < 0 || lvl >= maxLevel {
+			_ = ssTable.Close()
+			continue
+		}
+		l.levels[lvl].ssTables = append(l.levels[lvl].ssTables, ssTable)
 	}
 
 	return nil
@@ -259,119 +327,123 @@ func (l *LSMTree) loadSSTablesFromDisk() error {
 func (l *LSMTree) PUT(key string, val []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	
+
 	if !l.inRecovery {
-		l.wal.writeEntry(MustMarshal(&WAL_Entry{
-			LogSequenceNumber: l.wal.lastSequenceNo,
-			Key: key,
-			Value: val,
-			Command:   Command_PUT,
-			CRC: crc32.ChecksumIEEE(append(val, byte(l.wal.lastSequenceNo))),
-		}))
+		if err := l.wal.WriteEntry(Command_PUT, key, val); err != nil {
+			return err
+		}
 	}
 
 	l.memtable.Put(key, val)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
-		l.flushingQueueMu.Lock()
-		l.flushingQueue = append(l.flushingQueue, l.memtable)
-		l.flushingQueueMu.Unlock()
-		l.flushingChan <- l.memtable
-		l.memtable = NewMemTable()
+		l.enqueueMemtableFlush()
 	}
-	
+
 	return nil
+}
+
+func (l *LSMTree) Put(key string, val []byte) error {
+	return l.PUT(key, val)
 }
 
 func (l *LSMTree) GET(key string) (string, error) {
 	l.mu.RLock()
 	val := l.memtable.Get(key)
+	l.mu.RUnlock()
+
 	if val != nil {
 		if val.Command == Command_DELETE {
-			l.mu.RUnlock()
-			return "", nil
+			return "", &NotFoundError{key: key}
 		}
 		return string(val.Value), nil
 	}
-	l.mu.RUnlock()
-	
+
 	l.flushingQueueMu.RLock()
-	for i := len(l.flushingQueue) - 1; i>= 0; i-- {
-		val := l.flushingQueue[i].Get(key)
-		if val != nil {
-			if val.Command == Command_DELETE {
-				return "", nil
+	for i := len(l.flushingQueue) - 1; i >= 0; i-- {
+		entry := l.flushingQueue[i].Get(key)
+		if entry != nil {
+			l.flushingQueueMu.RUnlock()
+			if entry.Command == Command_DELETE {
+				return "", &NotFoundError{key: key}
 			}
-			return string(val.Value), nil
+			return string(entry.Value), nil
 		}
 	}
 	l.flushingQueueMu.RUnlock()
-	
+
 	for i := range l.levels {
 		l.levels[i].mu.RLock()
-		for i := len(l.levels[i].ssTables) - 1; i>= 0; i-- {
-			val, err := l.levels[i].ssTables[i].Get(key)
+		for j := len(l.levels[i].ssTables) - 1; j >= 0; j-- {
+			entry, err := l.levels[i].ssTables[j].Get(key)
 			if err != nil {
 				l.levels[i].mu.RUnlock()
 				return "", err
 			}
-			if val != nil {
+			if entry != nil {
 				l.levels[i].mu.RUnlock()
-				if val.Command == Command_DELETE {
-					return "", nil
+				if entry.Command == Command_DELETE {
+					return "", &NotFoundError{key: key}
 				}
-				return string(val.Value), nil
+				return string(entry.Value), nil
 			}
 		}
 		l.levels[i].mu.RUnlock()
 	}
-	
-	return "", nil
+
+	return "", &NotFoundError{key: key}
+}
+
+func (l *LSMTree) Get(key string) (string, error) {
+	return l.GET(key)
 }
 
 func (l *LSMTree) DELETE(key string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	val, err := l.GET(key)
-	if err != nil {
-		return err
+	if !l.inRecovery {
+		if err := l.wal.WriteEntry(Command_DELETE, key, nil); err != nil {
+			return err
+		}
 	}
 
-	if !l.inRecovery {
-		l.wal.writeEntry(MustMarshal(&WAL_Entry{
-			LogSequenceNumber: l.wal.lastSequenceNo,
-			Key: key,
-			Value: []byte(val),
-			Command:   Command_PUT,
-			CRC: crc32.ChecksumIEEE(append([]byte(val), byte(l.wal.lastSequenceNo))),
-		}))
-	}
-	
 	l.memtable.Del(key)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
-		l.flushingQueueMu.Lock()
-		l.flushingQueue = append(l.flushingQueue, l.memtable)
-		l.flushingQueueMu.Unlock()
-		l.flushingChan <- l.memtable
-		l.memtable = NewMemTable()
+		l.enqueueMemtableFlush()
 	}
-	
+
 	return nil
 }
 
+func (l *LSMTree) Del(key string) error {
+	return l.DELETE(key)
+}
+
+func (l *LSMTree) enqueueMemtableFlush() {
+	l.flushingQueueMu.Lock()
+	l.flushingQueue = append(l.flushingQueue, l.memtable)
+	l.flushingQueueMu.Unlock()
+	l.flushingChan <- l.memtable
+	l.memtable = NewMemTable()
+}
+
 func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
-	ranges := [][]*LSMEntry{}
-	
+	if startKey > endKey {
+		return []KVPair{}, nil
+	}
+
+	var ranges [][]*LSMEntry
+
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	for _, level := range l.levels {
-		level.mu.RLock()
-		defer level.mu.RUnlock()
-	}
-
 	l.flushingQueueMu.RLock()
 	defer l.flushingQueueMu.RUnlock()
+
+	for _, lvl := range l.levels {
+		lvl.mu.RLock()
+		defer lvl.mu.RUnlock()
+	}
 
 	ranges = append(ranges, l.memtable.RangeScan(startKey, endKey))
 
@@ -380,9 +452,9 @@ func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
 		ranges = append(ranges, entries)
 	}
 
-	for _, level := range l.levels {
-		for i := len(level.ssTables) - 1; i >= 0; i-- {
-			entries, err := level.ssTables[i].RangeScan(startKey, endKey)
+	for _, lvl := range l.levels {
+		for i := len(lvl.ssTables) - 1; i >= 0; i-- {
+			entries, err := lvl.ssTables[i].RangeScan(startKey, endKey)
 			if err != nil {
 				return nil, err
 			}
@@ -395,56 +467,88 @@ func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
 
 func OpenSSTable(filename string) (*SSTable, error) {
 	file, err := os.Open(filename)
-	if err != nil{
+	if err != nil {
 		return nil, err
 	}
-	
+
 	bloomFilter, index, dataOffset, err := ReadSSTableMetaData(file)
-	return &SSTable{bloomFilter: bloomFilter, index: index, dataOffSet: dataOffset}, nil
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &SSTable{bloomFilter: bloomFilter, index: index, file: file, dataOffSet: dataOffset}, nil
 }
 
-func (l *LSMTree) backgroundMemTableflushing() error {
-	defer l.wg.Done()
-	for {
-		select {
-		case <- l.ctx.Done():
-			if len(l.flushingChan) == 0 {
-				return nil
-			}
-		case memtable := <- l.flushingChan:
-			l.flushMemTable(memtable)
-		}
+func (l *LSMTree) backgroundMemTableflushing() {
+	defer l.flushingWg.Done()
+	for memtable := range l.flushingChan {
+		l.flushMemTable(memtable)
 	}
 }
 
 func (l *LSMTree) flushMemTable(memtable *Memtable) {
-	if memtable.size == 0 {
+	if memtable == nil || memtable.size == 0 {
+		l.flushingQueueMu.Lock()
+		if len(l.flushingQueue) > 0 && l.flushingQueue[0] == memtable {
+			l.flushingQueue[0] = nil
+			l.flushingQueue = l.flushingQueue[1:]
+		}
+		l.flushingQueueMu.Unlock()
 		return
 	}
-	
+
 	atomic.AddUint64(&l.current_sst_sequence, 1)
 	sstableFileName := l.getSSTableFileName(0)
 	sst, err := SerializeToSSTable(memtable.GetEntries(), sstableFileName)
 	if err != nil {
 		panic(err)
 	}
-	
-	l.levels[0].mu.Lock()
+
 	l.flushingQueueMu.Lock()
-	
+	l.levels[0].mu.Lock()
+
 	l.levels[0].ssTables = append(l.levels[0].ssTables, sst)
-	l.flushingQueue[0] = nil
-	l.flushingQueue = l.flushingQueue[1:]
-	
-	l.flushingQueueMu.Unlock()
+	if len(l.flushingQueue) > 0 {
+		l.flushingQueue[0] = nil
+		l.flushingQueue = l.flushingQueue[1:]
+	}
+
 	l.levels[0].mu.Unlock()
-	
-	l.compactionChan <- 0
+	l.flushingQueueMu.Unlock()
+
+	select {
+	case l.compactionChan <- 0:
+	default:
+	}
+}
+
+func parseSSTableFileName(filename string) (int, uint64, error) {
+	base := filepath.Base(filename)
+	if !strings.HasPrefix(base, SSTableFilePrefix) {
+		return 0, 0, fmt.Errorf("not an sstable file: %s", filename)
+	}
+	trimmed := strings.TrimPrefix(base, SSTableFilePrefix)
+	parts := strings.Split(trimmed, "_")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid sstable filename format: %s", filename)
+	}
+	level, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	seq, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	return level, seq, nil
 }
 
 func (l *LSMTree) sortSSTablesBySequenceNumber() {
-	for _, level := range l.levels {
-		slices.SortFunc(level.ssTables, func(i, j *SSTable) int {
+	for _, lvl := range l.levels {
+		slices.SortFunc(lvl.ssTables, func(i, j *SSTable) int {
+			if i.file == nil || j.file == nil {
+				return 0
+			}
 			seq1 := l.getSequenceNumber(i.file.Name())
 			seq2 := l.getSequenceNumber(j.file.Name())
 			return cmp.Compare(seq1, seq2)
@@ -453,45 +557,43 @@ func (l *LSMTree) sortSSTablesBySequenceNumber() {
 }
 
 func (l *LSMTree) getSequenceNumber(filename string) uint64 {
-	sequenceStr := filename[len(l.directory)+1+2+len(SSTableFilePrefix):]
-	sequence, err := strconv.ParseUint(sequenceStr, 10, 64)
+	_, seq, err := parseSSTableFileName(filename)
 	if err != nil {
-		panic(err)
+		return 0
 	}
-	return sequence
+	return seq
 }
 
 func (l *LSMTree) getLevelFromSSTableFileName(filename string) int {
-	levelStr := filename[len(l.directory) + 1 + len(SSTableFilePrefix) : len(l.directory) + 2 + len(SSTableFilePrefix)]
-	level, err := strconv.Atoi(levelStr)
+	lvl, _, err := parseSSTableFileName(filename)
 	if err != nil {
-		panic(err)
+		return 0
 	}
-	return level
+	return lvl
 }
 
 func (l *LSMTree) getSSTableFileName(level int) string {
-	return fmt.Sprintf("%s/%s%d_%d", l.directory, SSTableFilePrefix, level, atomic.LoadUint64(&l.current_sst_sequence))
+	return filepath.Join(l.directory, fmt.Sprintf("%s%d_%d", SSTableFilePrefix, level, atomic.LoadUint64(&l.current_sst_sequence)))
 }
 
 func isSSTableFile(filename string) bool {
-	return filename[:len(SSTableFilePrefix)] == SSTableFilePrefix
+	return strings.HasPrefix(filepath.Base(filename), SSTableFilePrefix)
 }
 
 func (l *LSMTree) initializeCurrentSequenceNumber() error {
 	var maxSequence uint64
-	for _, level := range l.levels {
-		if len(level.ssTables) > 0 {
-			lastSSTable := level.ssTables[len(level.ssTables)-1]
-			sequence := l.getSequenceNumber(lastSSTable.file.Name())
-			if sequence > maxSequence {
-				maxSequence = sequence
+	for _, lvl := range l.levels {
+		for _, sst := range lvl.ssTables {
+			if sst != nil && sst.file != nil {
+				seq := l.getSequenceNumber(sst.file.Name())
+				if seq > maxSequence {
+					maxSequence = seq
+				}
 			}
 		}
 	}
 
 	atomic.StoreUint64(&l.current_sst_sequence, maxSequence)
-
 	return nil
 }
 
@@ -500,7 +602,7 @@ func (l *LSMTree) recoverFromWAL() error {
 	defer func() {
 		l.inRecovery = false
 	}()
-	entries, err := l.wal.readAll()
+	entries, err := l.readEntriesFromWAL()
 	if err != nil {
 		return err
 	}
@@ -515,21 +617,18 @@ func (l *LSMTree) recoverFromWAL() error {
 }
 
 func (l *LSMTree) readEntriesFromWAL() ([]*WAL_Entry, error) {
-	entries, err := l.wal.readAllFromOffset(-1)
+	entries, err := l.wal.ReadAll()
 	if err != nil {
-		_, err = l.wal.Repair()
-		if err != nil {
-			return nil, err
+		repairedEntries, repErr := l.wal.Repair()
+		if repErr != nil {
+			return nil, repErr
 		}
-		entries, err = l.wal.readAllFromOffset(-1)
-		if err != nil {
-			return nil, err
-		}
+		return repairedEntries, nil
 	}
 	return entries, nil
 }
-func (l *LSMTree) processWALEntry(entry *WAL_Entry) error {
 
+func (l *LSMTree) processWALEntry(entry *WAL_Entry) error {
 	switch entry.Command {
 	case Command_PUT:
 		return l.PUT(entry.Key, entry.Value)

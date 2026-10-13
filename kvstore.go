@@ -31,6 +31,8 @@ func (kv *KVStore) Set(k, v string) {
 }
 
 func (kv *KVStore) Get(k string) (string, error) {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
 	v, ok := kv.data[k]
 	if !ok {
 		return "", &NotFoundError{ key: k }

@@ -15,8 +15,9 @@ type SSTable struct {
 }
 
 type SSTableIterator struct {
-	s *SSTable
-	file *os.File
+	s     *SSTable
+	file  *os.File
+	Value *LSMEntry
 	value *LSMEntry
 }
 
@@ -107,11 +108,22 @@ func writeSSTable(filename string, bloomfilterData, indexData []byte, entriesBuf
 		return 0, err
 	}
 
+	if err := file.Sync(); err != nil {
+		return 0, err
+	}
+
 	return dataOffSet, nil
 }
 
+func (s *SSTable) Close() error {
+	if s != nil && s.file != nil {
+		return s.file.Close()
+	}
+	return nil
+}
+
 func (s *SSTable) Get(key string) (*LSMEntry, error) {
-	if !s.bloomFilter.Test([]byte(key)) {
+	if s.bloomFilter != nil && !s.bloomFilter.Test([]byte(key)) {
 		return nil, nil
 	}
 
@@ -120,102 +132,166 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 		return nil, nil
 	}
 
-	if _, err := s.file.Seek(int64(s.dataOffSet + offSet), io.SeekStart); err != nil {
+	entryOffset := s.dataOffSet + offSet
+	sizeBuf := make([]byte, 8)
+	if _, err := s.file.ReadAt(sizeBuf, entryOffset); err != nil {
+		return nil, err
+	}
+	size := int64(binary.LittleEndian.Uint64(sizeBuf))
+
+	data := make([]byte, size)
+	if _, err := s.file.ReadAt(data, entryOffset+8); err != nil {
 		return nil, err
 	}
 
-	size, err := ReadDataSize(s.file)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := ReadDataEntry(s.file, size)
-	if err != nil {
-		return nil, err
-	}
 	entry := LSMEntry{}
 	MustUnmarshal(data, &entry)
-	
+
 	return &entry, nil
 }
 
 func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 	exists, offSet := FindOffsetForRangeKey(s.index.Entries, startKey)
 	if !exists {
-		return nil, nil
+		return []*LSMEntry{}, nil
 	}
 
-	if _, err := s.file.Seek(int64(s.dataOffSet + offSet), io.SeekStart); err != nil {
+	currentOffset := s.dataOffSet + offSet
+	fileInfo, err := s.file.Stat()
+	if err != nil {
 		return nil, err
 	}
+	fileSize := fileInfo.Size()
 
-	var res []*LSMEntry
-	loop:
-	for {
-		size, err := ReadDataSize(s.file)
-		if err != nil {
+	var res = []*LSMEntry{}
+	sizeBuf := make([]byte, 8)
+
+	for currentOffset < fileSize {
+		if _, err := s.file.ReadAt(sizeBuf, currentOffset); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, err
 		}
+		size := int64(binary.LittleEndian.Uint64(sizeBuf))
+		currentOffset += 8
 
-		data, err := ReadDataEntry(s.file, size)
-		if err != nil {
+		data := make([]byte, size)
+		if _, err := s.file.ReadAt(data, currentOffset); err != nil {
 			return nil, err
 		}
+		currentOffset += size
+
 		entry := LSMEntry{}
 		MustUnmarshal(data, &entry)
-		res = append(res, &entry)
 
-		if entry.Key == endKey{
-			break loop
+		if entry.Key > endKey {
+			break
+		}
+		res = append(res, &entry)
+		if entry.Key == endKey {
+			break
 		}
 	}
 
 	return res, nil
 }
 
+func (s *SSTable) GetEntries() ([]*LSMEntry, error) {
+	fileInfo, err := s.file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	fileSize := fileInfo.Size()
+	currentOffset := s.dataOffSet
+	var entries []*LSMEntry
+	sizeBuf := make([]byte, 8)
+
+	for currentOffset < fileSize {
+		if _, err := s.file.ReadAt(sizeBuf, currentOffset); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		size := int64(binary.LittleEndian.Uint64(sizeBuf))
+		currentOffset += 8
+
+		data := make([]byte, size)
+		if _, err := s.file.ReadAt(data, currentOffset); err != nil {
+			return nil, err
+		}
+		currentOffset += size
+
+		entry := &LSMEntry{}
+		MustUnmarshal(data, entry)
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
 func (s *SSTable) Front() *SSTableIterator {
+	if s.file == nil {
+		return nil
+	}
 	file, err := os.Open(s.file.Name())
 	if err != nil {
 		return nil
 	}
 
-	i := &SSTableIterator{s: s, file: file, value: &LSMEntry{}}
-	if _, err := s.file.Seek(int64(s.dataOffSet), io.SeekStart); err != nil {
+	if _, err := file.Seek(s.dataOffSet, io.SeekStart); err != nil {
+		_ = file.Close()
 		return nil
 	}
 
-	size, err := ReadDataSize(i.file)
+	size, err := ReadDataSize(file)
 	if err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		panic(err)
-	}
-
-	data, err := ReadDataEntry(i.file, size)
-	if err != nil {
+		_ = file.Close()
 		return nil
 	}
 
-	MustUnmarshal(data, i.value)
-	return i
+	data, err := ReadDataEntry(file, size)
+	if err != nil {
+		_ = file.Close()
+		return nil
+	}
+
+	entry := &LSMEntry{}
+	MustUnmarshal(data, entry)
+	return &SSTableIterator{s: s, file: file, Value: entry, value: entry}
 }
 
 func (i *SSTableIterator) Next() *SSTableIterator {
+	if i == nil || i.file == nil {
+		return nil
+	}
+
 	size, err := ReadDataSize(i.file)
 	if err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		panic(err)
+		_ = i.file.Close()
+		i.file = nil
+		return nil
 	}
 
 	data, err := ReadDataEntry(i.file, size)
 	if err != nil {
+		_ = i.file.Close()
+		i.file = nil
 		return nil
 	}
 
-	i.value = &LSMEntry{}
-	MustUnmarshal(data, i.value)
+	i.Value = &LSMEntry{}
+	MustUnmarshal(data, i.Value)
+	i.value = i.Value
 	return i
+}
+
+func (i *SSTableIterator) Close() error {
+	if i != nil && i.file != nil {
+		err := i.file.Close()
+		i.file = nil
+		return err
+	}
+	return nil
 }

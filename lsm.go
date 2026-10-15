@@ -56,6 +56,7 @@ type LSMTree struct {
 	cancel               context.CancelFunc
 	flushingWg           sync.WaitGroup
 	compactionWg         sync.WaitGroup
+	closed               bool
 }
 
 func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, error) {
@@ -111,6 +112,12 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 
 func (l *LSMTree) Close() error {
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil
+	}
+	l.closed = true
+
 	if l.memtable != nil && l.memtable.size > 0 {
 		l.flushingQueueMu.Lock()
 		l.flushingQueue = append(l.flushingQueue, l.memtable)

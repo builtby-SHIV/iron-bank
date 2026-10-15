@@ -172,12 +172,34 @@ go test -bench . -benchmem -run "^$"
 ```bash
 go run .
 ```
-The server starts on `http://localhost:8080`.
+The server starts on `http://localhost:8001` with data stored in `./data/8001`.
+
+### Running Multiple Processes
+You can run multiple instances concurrently on different ports without data collisions. Each process automatically provisions its own storage directory based on its port number (e.g. `./data/<port>` and `./data/<port>_wal`):
+
+```bash
+# Node 1 (port 8001 -> data stored in ./data/8001)
+go run . -port 8001
+# Or using -addr
+go run . -addr :8001
+
+# Node 2 (port 8002 -> data stored in ./data/8002)
+go run . -port 8002
+
+# Node 3 (port 8003 -> data stored in ./data/8003)
+go run . -port 8003
+```
+
+Flags available:
+- `-port <number>`: HTTP listen port (e.g. `8001`, `8002`).
+- `-addr <address>`: HTTP listen address (e.g. `:8001`, `127.0.0.1:8001`). Port is automatically extracted.
+- `-data <path>`: Optional override for the storage directory (defaults to `./data/<port>`).
+- `-id <identifier>`: Optional node identifier (defaults to `node-<port>`).
 
 ### Build
 ```bash
 go build -o iron-bank .
-./iron-bank
+./iron-bank -port 8001
 ```
 
 ## Project Structure

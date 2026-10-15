@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"flag"
 	"log"
 	"net/http"
 )
@@ -112,9 +112,14 @@ func main() {
 	mux.HandleFunc("GET /get", srv.get)
 	mux.HandleFunc("DELETE /del", srv.delete)
 
-	fmt.Println("Server starting on http://localhost:8080")
+	addr := flag.String("addr", ":8001", "HTTP listen address")
+	dataDir := flag.String("data", "./data/node1", "Storage directory")
+	nodeID := flag.String("id", "node1", "Node identifier")
+	flag.Parse()
 
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	log.Printf("Starting node %s on %s %s", *nodeID, *addr, *dataDir)
+
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		panic(err)
 	}
 }

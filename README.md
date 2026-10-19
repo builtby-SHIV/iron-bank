@@ -168,51 +168,147 @@ go test -bench . -benchmem -run "^$"
 - [Go 1.26+](https://go.dev/dl/)
 - [Protocol Buffers compiler](https://protobuf.dev/) (only if modifying `.proto` files)
 
-### Run
-```bash
-go run . -id 8001 -http :8001 -tcp :9001
-```
-The server starts on HTTP `:8001` and TCP `:9001` with data stored in `./data/8001`.
-
-### Running Multiple Processes
-You can run multiple instances concurrently without port or storage collisions. Each process provisions its own storage directory based on its identifier/port (e.g. `./data/<id>` and `./data/<id>_wal`):
-
-```bash
-# Node 1 (HTTP :8001, TCP :9001 -> data stored in ./data/8001)
-go run . -id 8001 -http :8001 -tcp :9001
-
-# Node 2 (HTTP :8002, TCP :9002 -> data stored in ./data/8002)
-go run . -id 8002 -http :8002 -tcp :9002
-
-# Node 3 (HTTP omitted, TCP :9003 -> data stored in ./data/8003)
-go run . -id 8003 -tcp :9003
-```
-
-Flags available:
-- `-tcp <address>`: TCP listen address (**required**, e.g. `:9001`, `127.0.0.1:9001`).
-- `-http <address>`: HTTP listen address (**optional**, e.g. `:8001`, `127.0.0.1:8001`). If omitted, the HTTP API is disabled.
-- `-id <identifier>`: Node identifier (e.g. `8001`, defaults to HTTP/TCP port).
-- `-data <path>`: Optional override for the storage directory (defaults to `./data/<id>`).
-
 ### Build
 ```bash
 go build -o iron-bank .
-./iron-bank -id 8001 -http :8001 -tcp :9001
 ```
+
+---
+
+## Starting a Cluster — Fixed Method
+
+Iron Bank follows a **fixed port convention** for running multiple processes on one machine. Each node is identified by a small integer ID, and its ports are derived mechanically from that ID:
+
+| Node ID | HTTP port | TCP port | Storage directory |
+|---------|-----------|----------|-------------------|
+| `1`     | `:8001`   | `:7001`  | `./data/1/`       |
+| `2`     | `:8002`   | `:7002`  | `./data/2/`       |
+| `3`     | `:8003`   | `:7003`  | `./data/3/`       |
+| `N`     | `:800N`   | `:700N`  | `./data/N/`       |
+
+> [!IMPORTANT]
+> `--tcp` is **required**. It is the port reserved for replication and leader election.
+> `--http` is **optional** — omit it to run a node with no HTTP interface (e.g. for internal-only replicas).
+
+### Single node (development / smoke test)
+
+```bash
+./iron-bank --id=1 --http=:8001 --tcp=:7001 --role=leader
+```
+
+Starts node `1` as leader. WAL segments live in `./data/1_wal/`, SSTables in `./data/1/`.
+
+### 3-node cluster (open three terminals)
+
+```bash
+# Terminal 1 — leader
+./iron-bank --id=1 --http=:8001 --tcp=:7001 --role=leader
+
+# Terminal 2 — follower
+./iron-bank --id=2 --http=:8002 --tcp=:7002 --role=follower
+
+# Terminal 3 — follower (HTTP disabled — internal replica only)
+./iron-bank --id=3 --tcp=:7003 --role=follower
+```
+
+Each process writes state to its own isolated directory and binds its own ports — no configuration files, no service discovery daemon, no shared state.
+
+### Flags reference
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--id` | No | derived from HTTP or TCP port | Node identifier stored in `node.json` |
+| `--tcp` | **Yes** | — | TCP address for replication / election (e.g. `:7001`) |
+| `--http` | No | *(disabled)* | HTTP address for the KV API (e.g. `:8001`) |
+| `--role` | No | `unknown` | Node role: `leader`, `follower`, or `observer` |
+| `--data` | No | `./data/<id>` | Override the storage directory |
+
+### Persistent identity — `node.json`
+
+On first start, the process writes its configuration to `<data-dir>/node.json`:
+
+```json
+{
+  "id":        "1",
+  "http_addr": ":8001",
+  "tcp_addr":  ":7001",
+  "role":      "leader"
+}
+```
+
+On every subsequent restart, values are **loaded from disk first**. CLI flags are then merged on top — only the flags you pass override the persisted values. This means you can restart a node with just:
+
+```bash
+./iron-bank --id=1 --tcp=:7001   # http and role are restored from node.json
+```
+
+To promote a follower to leader at runtime, call `UpdateRole` programmatically — the new role is persisted immediately.
+
+### HTTP API
+
+The full KV API is available on every node that has `--http` set.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/put` | Write a key-value pair |
+| `GET` | `/get?key=<k>` | Read a value |
+| `DELETE` | `/del?key=<k>` | Delete a key |
+| `GET` | `/status` | Node identity + role + known peers |
+| `GET` | `/peers` | List of known peer nodes |
+
+```bash
+# Write
+curl -X POST http://localhost:8001/put \
+  -H "Content-Type: application/json" \
+  -d '{"key":"city","val":"braavos"}'
+
+# Read
+curl http://localhost:8001/get?key=city
+
+# Node status
+curl http://localhost:8001/status
+```
+
+---
+
+## Disk Layout
+
+Each node writes to two directories derived from its storage path:
+
+```
+data/
+├── 1/                    ← SSTables for node 1
+│   ├── node.json         ← Persistent node identity (id, role, http, tcp)
+│   ├── sstable_0_1
+│   ├── sstable_1_1
+│   └── ...
+├── 1_wal/                ← WAL segments for node 1
+│   ├── segment-0
+│   └── segment-1
+├── 2/                    ← SSTables for node 2
+├── 2_wal/                ← WAL segments for node 2
+└── ...
+```
+
+Every node's storage is fully isolated — no shared files, no locking between processes.
+
+---
 
 ## Project Structure
 
 ```
 iron-bank/
-├── main.go              # HTTP server and API handlers
-├── kvstore.go           # Original in-memory KV store (map-backed)
-├── lsm.go              # LSM tree: memtable management, compaction, flush, recovery
-├── memtable.go          # Skip list–backed memtable with range scan support
-├── sstable.go           # SSTable read/write, serialization, and iteration
-├── sstable_utils.go     # Binary search on index, protobuf helpers, I/O utilities
+├── main.go              # CLI flags, startup wiring, HTTP handlers
+├── nodestate.go         # Persistent node identity (id, role, http, tcp) → node.json
+├── peer.go              # Thread-safe PeerMap for cluster membership
+├── lsm.go               # LSM tree: memtable, compaction, flush, WAL recovery
+├── memtable.go          # Skip list–backed memtable with range scan
+├── sstable.go           # SSTable read/write, serialization, iteration
+├── sstable_utils.go     # Binary search, protobuf helpers, I/O utilities
 ├── bloomfilter.go       # Bloom filter (murmur3, 3 hash functions)
 ├── wal.go               # Write-ahead log: segments, rotation, repair, fsync
-├── merge_utils.go       # Min-heap based k-way merge for compaction and range scans
+├── merge_utils.go       # Min-heap k-way merge for compaction and range scans
+├── kvstore.go           # Original in-memory KV store (map-backed)
 ├── serialization.proto  # Protobuf definitions for all on-disk structures
 ├── serialization.pb.go  # Generated protobuf Go code
 ├── go.mod               # Go module and dependencies
@@ -231,6 +327,7 @@ iron-bank/
 
 - [*Designing Data-Intensive Applications*](https://dataintensive.net/) by Martin Kleppmann — the book that started it all
 - [LSM Tree - Wikipedia](https://en.wikipedia.org/wiki/Log-structured_merge-tree)
+- [Raft Consensus Algorithm](https://raft.github.io/) — basis for the replication design
 
 ## License
 

@@ -49,89 +49,113 @@ func TestExtractPort(t *testing.T) {
 }
 
 func TestResolveConfig(t *testing.T) {
-	t.Run("Default configuration when no flags provided", func(t *testing.T) {
-		addr, dataDir, nodeID, port, err := resolveConfig(0, "", "", "")
+	t.Run("Valid config with id, http, and tcp", func(t *testing.T) {
+		cfg, err := resolveConfig("8001", ":8001", ":9001", "", "", 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if port != "8001" {
-			t.Errorf("expected port 8001, got %s", port)
+		if cfg.NodeID != "8001" {
+			t.Errorf("expected NodeID 8001, got %s", cfg.NodeID)
 		}
-		if addr != ":8001" {
-			t.Errorf("expected addr :8001, got %s", addr)
+		if cfg.HTTPAddr != ":8001" {
+			t.Errorf("expected HTTPAddr :8001, got %s", cfg.HTTPAddr)
+		}
+		if cfg.TCPAddr != ":9001" {
+			t.Errorf("expected TCPAddr :9001, got %s", cfg.TCPAddr)
 		}
 		expectedDir := filepath.Join("data", "8001")
-		if dataDir != expectedDir {
-			t.Errorf("expected dataDir %s, got %s", expectedDir, dataDir)
-		}
-		if nodeID != "node-8001" {
-			t.Errorf("expected nodeID node-8001, got %s", nodeID)
+		if cfg.DataDir != expectedDir {
+			t.Errorf("expected DataDir %s, got %s", expectedDir, cfg.DataDir)
 		}
 	})
 
-	t.Run("Configured via port flag", func(t *testing.T) {
-		addr, dataDir, nodeID, port, err := resolveConfig(8002, "", "", "")
+	t.Run("HTTP flag is optional (omitted)", func(t *testing.T) {
+		cfg, err := resolveConfig("8001", "", ":9001", "", "", 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if port != "8002" {
-			t.Errorf("expected port 8002, got %s", port)
+		if cfg.NodeID != "8001" {
+			t.Errorf("expected NodeID 8001, got %s", cfg.NodeID)
 		}
-		if addr != ":8002" {
-			t.Errorf("expected addr :8002, got %s", addr)
+		if cfg.HTTPAddr != "" {
+			t.Errorf("expected empty HTTPAddr, got %s", cfg.HTTPAddr)
 		}
-		expectedDir := filepath.Join("data", "8002")
-		if dataDir != expectedDir {
-			t.Errorf("expected dataDir %s, got %s", expectedDir, dataDir)
+		if cfg.TCPAddr != ":9001" {
+			t.Errorf("expected TCPAddr :9001, got %s", cfg.TCPAddr)
 		}
-		if nodeID != "node-8002" {
-			t.Errorf("expected nodeID node-8002, got %s", nodeID)
-		}
-	})
-
-	t.Run("Configured via addr flag", func(t *testing.T) {
-		addr, dataDir, nodeID, port, err := resolveConfig(0, "127.0.0.1:8003", "", "")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if port != "8003" {
-			t.Errorf("expected port 8003, got %s", port)
-		}
-		if addr != "127.0.0.1:8003" {
-			t.Errorf("expected addr 127.0.0.1:8003, got %s", addr)
-		}
-		expectedDir := filepath.Join("data", "8003")
-		if dataDir != expectedDir {
-			t.Errorf("expected dataDir %s, got %s", expectedDir, dataDir)
-		}
-		if nodeID != "node-8003" {
-			t.Errorf("expected nodeID node-8003, got %s", nodeID)
+		expectedDir := filepath.Join("data", "8001")
+		if cfg.DataDir != expectedDir {
+			t.Errorf("expected DataDir %s, got %s", expectedDir, cfg.DataDir)
 		}
 	})
 
-	t.Run("Explicit custom data directory and node id overrides defaults", func(t *testing.T) {
-		addr, dataDir, nodeID, port, err := resolveConfig(0, ":8004", "./custom_storage", "custom-node-4")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if port != "8004" {
-			t.Errorf("expected port 8004, got %s", port)
-		}
-		if addr != ":8004" {
-			t.Errorf("expected addr :8004, got %s", addr)
-		}
-		if dataDir != "./custom_storage" {
-			t.Errorf("expected dataDir ./custom_storage, got %s", dataDir)
-		}
-		if nodeID != "custom-node-4" {
-			t.Errorf("expected nodeID custom-node-4, got %s", nodeID)
-		}
-	})
-
-	t.Run("Invalid address returns error", func(t *testing.T) {
-		_, _, _, _, err := resolveConfig(0, "not_a_valid_addr", "", "")
+	t.Run("Missing required tcp flag returns error", func(t *testing.T) {
+		_, err := resolveConfig("8001", ":8001", "", "", "", 0)
 		if err == nil {
-			t.Fatal("expected error for invalid address, got nil")
+			t.Fatal("expected error when -tcp flag is missing, got nil")
+		}
+		if !strings.Contains(err.Error(), "-tcp flag is required") {
+			t.Fatalf("expected '-tcp flag is required' in error, got %v", err)
+		}
+	})
+
+	t.Run("ID omitted defaults to http port or tcp port", func(t *testing.T) {
+		cfg1, err := resolveConfig("", ":8002", ":9002", "", "", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg1.NodeID != "8002" {
+			t.Errorf("expected NodeID 8002 from http, got %s", cfg1.NodeID)
+		}
+
+		cfg2, err := resolveConfig("", "", ":9003", "", "", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg2.NodeID != "9003" {
+			t.Errorf("expected NodeID 9003 from tcp, got %s", cfg2.NodeID)
+		}
+	})
+
+	t.Run("Explicit custom data directory overrides default", func(t *testing.T) {
+		cfg, err := resolveConfig("8001", ":8001", ":9001", "./custom_dir", "", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.DataDir != "./custom_dir" {
+			t.Errorf("expected DataDir ./custom_dir, got %s", cfg.DataDir)
+		}
+	})
+
+	t.Run("Invalid TCP address returns error", func(t *testing.T) {
+		_, err := resolveConfig("8001", ":8001", "invalid_tcp", "", "", 0)
+		if err == nil {
+			t.Fatal("expected error for invalid TCP address, got nil")
+		}
+	})
+
+	t.Run("Invalid HTTP address returns error", func(t *testing.T) {
+		_, err := resolveConfig("8001", "invalid_http", ":9001", "", "", 0)
+		if err == nil {
+			t.Fatal("expected error for invalid HTTP address, got nil")
+		}
+	})
+
+	t.Run("Backward compatibility with -addr and -port aliases", func(t *testing.T) {
+		cfg, err := resolveConfig("", "", ":9001", "", ":8001", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.HTTPAddr != ":8001" {
+			t.Errorf("expected HTTPAddr :8001 from -addr, got %s", cfg.HTTPAddr)
+		}
+
+		cfg2, err := resolveConfig("", "", ":9001", "", "", 8005)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg2.HTTPAddr != ":8005" {
+			t.Errorf("expected HTTPAddr :8005 from -port, got %s", cfg2.HTTPAddr)
 		}
 	})
 }
@@ -345,3 +369,106 @@ func TestMultipleServersHTTP(t *testing.T) {
 		t.Fatalf("expected 200 OK from server 2, got %d", getResp2.StatusCode)
 	}
 }
+
+func TestTCPAndOptionalHTTPServer(t *testing.T) {
+	tempBase := t.TempDir()
+
+	// 1. Process 1: Starts both TCP and HTTP
+	cfg1, err := resolveConfig("8001", ":28001", ":29001", filepath.Join(tempBase, "8001"), "", 0)
+	if err != nil {
+		t.Fatalf("resolveConfig failed: %v", err)
+	}
+
+	lsm1, err := Open(cfg1.DataDir, 1024, true)
+	if err != nil {
+		t.Fatalf("failed to open lsm1: %v", err)
+	}
+	defer lsm1.Close()
+
+	tcpListener1, err := net.Listen("tcp", cfg1.TCPAddr)
+	if err != nil {
+		t.Fatalf("failed to listen on TCP 1: %v", err)
+	}
+	defer tcpListener1.Close()
+
+	go func() {
+		for {
+			conn, err := tcpListener1.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	srv1 := &Server{lsm: lsm1}
+	mux1 := http.NewServeMux()
+	mux1.HandleFunc("POST /put", srv1.add)
+	mux1.HandleFunc("GET /get", srv1.get)
+	httpServer1 := &http.Server{Addr: cfg1.HTTPAddr, Handler: mux1}
+	go func() {
+		_ = httpServer1.ListenAndServe()
+	}()
+	defer httpServer1.Close()
+
+	// Verify TCP connection succeeds on process 1
+	tcpConn1, err := net.Dial("tcp", "127.0.0.1:29001")
+	if err != nil {
+		t.Fatalf("failed to dial TCP on process 1: %v", err)
+	}
+	_ = tcpConn1.Close()
+
+	// Verify HTTP succeeds on process 1
+	putResp, err := http.Post("http://127.0.0.1:28001/put", "application/json", strings.NewReader(`{"key":"k1","val":"v1"}`))
+	if err != nil {
+		t.Fatalf("HTTP post to process 1 failed: %v", err)
+	}
+	_ = putResp.Body.Close()
+	if putResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created from HTTP server 1, got %d", putResp.StatusCode)
+	}
+
+	// 2. Process 2: Starts with ONLY TCP (HTTP is optional and omitted)
+	cfg2, err := resolveConfig("8002", "", ":29002", filepath.Join(tempBase, "8002"), "", 0)
+	if err != nil {
+		t.Fatalf("resolveConfig failed: %v", err)
+	}
+	if cfg2.HTTPAddr != "" {
+		t.Fatalf("expected empty HTTPAddr for process 2, got %s", cfg2.HTTPAddr)
+	}
+
+	lsm2, err := Open(cfg2.DataDir, 1024, true)
+	if err != nil {
+		t.Fatalf("failed to open lsm2: %v", err)
+	}
+	defer lsm2.Close()
+
+	tcpListener2, err := net.Listen("tcp", cfg2.TCPAddr)
+	if err != nil {
+		t.Fatalf("failed to listen on TCP 2: %v", err)
+	}
+	defer tcpListener2.Close()
+
+	go func() {
+		for {
+			conn, err := tcpListener2.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	// Verify TCP connection succeeds on process 2
+	tcpConn2, err := net.Dial("tcp", "127.0.0.1:29002")
+	if err != nil {
+		t.Fatalf("failed to dial TCP on process 2: %v", err)
+	}
+	_ = tcpConn2.Close()
+
+	// Verify process 1 and 2 storage directories are isolated
+	if cfg1.DataDir == cfg2.DataDir {
+		t.Fatalf("expected separate data directories, got identical %s", cfg1.DataDir)
+	}
+}
+

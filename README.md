@@ -127,7 +127,7 @@ $$\text{WAF} = \frac{\text{Total Bytes Written to Storage (WAL + SSTables)}}{\te
 
 ---
 
-### 2. Read Amplification Factor (RAF) & Why Range RAF > Point RAF
+### 2. Read Amplification Factor (RAF)
 
 $$\text{RAF} = \frac{\text{Bytes Read from Storage Media}}{\text{Logical Payload Bytes Retrieved by User}}$$
 
@@ -170,36 +170,34 @@ go test -bench . -benchmem -run "^$"
 
 ### Run
 ```bash
-go run .
+go run . -id 8001 -http :8001 -tcp :9001
 ```
-The server starts on `http://localhost:8001` with data stored in `./data/8001`.
+The server starts on HTTP `:8001` and TCP `:9001` with data stored in `./data/8001`.
 
 ### Running Multiple Processes
-You can run multiple instances concurrently on different ports without data collisions. Each process automatically provisions its own storage directory based on its port number (e.g. `./data/<port>` and `./data/<port>_wal`):
+You can run multiple instances concurrently without port or storage collisions. Each process provisions its own storage directory based on its identifier/port (e.g. `./data/<id>` and `./data/<id>_wal`):
 
 ```bash
-# Node 1 (port 8001 -> data stored in ./data/8001)
-go run . -port 8001
-# Or using -addr
-go run . -addr :8001
+# Node 1 (HTTP :8001, TCP :9001 -> data stored in ./data/8001)
+go run . -id 8001 -http :8001 -tcp :9001
 
-# Node 2 (port 8002 -> data stored in ./data/8002)
-go run . -port 8002
+# Node 2 (HTTP :8002, TCP :9002 -> data stored in ./data/8002)
+go run . -id 8002 -http :8002 -tcp :9002
 
-# Node 3 (port 8003 -> data stored in ./data/8003)
-go run . -port 8003
+# Node 3 (HTTP omitted, TCP :9003 -> data stored in ./data/8003)
+go run . -id 8003 -tcp :9003
 ```
 
 Flags available:
-- `-port <number>`: HTTP listen port (e.g. `8001`, `8002`).
-- `-addr <address>`: HTTP listen address (e.g. `:8001`, `127.0.0.1:8001`). Port is automatically extracted.
-- `-data <path>`: Optional override for the storage directory (defaults to `./data/<port>`).
-- `-id <identifier>`: Optional node identifier (defaults to `node-<port>`).
+- `-tcp <address>`: TCP listen address (**required**, e.g. `:9001`, `127.0.0.1:9001`).
+- `-http <address>`: HTTP listen address (**optional**, e.g. `:8001`, `127.0.0.1:8001`). If omitted, the HTTP API is disabled.
+- `-id <identifier>`: Node identifier (e.g. `8001`, defaults to HTTP/TCP port).
+- `-data <path>`: Optional override for the storage directory (defaults to `./data/<id>`).
 
 ### Build
 ```bash
 go build -o iron-bank .
-./iron-bank -port 8001
+./iron-bank -id 8001 -http :8001 -tcp :9001
 ```
 
 ## Project Structure

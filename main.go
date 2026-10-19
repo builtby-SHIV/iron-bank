@@ -107,23 +107,26 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"msg": "Key successfully deleted"})
 }
 
-func extractPort(addr string) (string, error) {
+func normalizeAddr(addr string) (string, string, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		return "", errors.New("empty address")
+		return "", "", errors.New("empty address")
 	}
 
 	// Case 1: Pure number like "8001"
 	if p, err := strconv.Atoi(addr); err == nil && p > 0 && p <= 65535 {
-		return addr, nil
+		return ":" + addr, addr, nil
 	}
 
-	// Case 2: Host:Port or :Port (e.g., ":8001", "127.0.0.1:8001", "[::1]:8001")
+	// Case 2: Contains colon (e.g. ":8001", "127.0.0.1:8001", "[::1]:8001")
 	if strings.Contains(addr, ":") {
-		_, port, err := net.SplitHostPort(addr)
+		host, port, err := net.SplitHostPort(addr)
 		if err == nil && port != "" {
 			if p, err := strconv.Atoi(port); err == nil && p > 0 && p <= 65535 {
-				return port, nil
+				if host == "" {
+					return ":" + port, port, nil
+				}
+				return addr, port, nil
 			}
 		}
 
@@ -132,99 +135,149 @@ func extractPort(addr string) (string, error) {
 		if lastColon != -1 && lastColon < len(addr)-1 {
 			candidate := addr[lastColon+1:]
 			if p, err := strconv.Atoi(candidate); err == nil && p > 0 && p <= 65535 {
-				return candidate, nil
+				return addr, candidate, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("invalid port in address %q", addr)
+	return "", "", fmt.Errorf("invalid address or port %q", addr)
 }
 
-func resolveConfig(portFlag int, addrFlag, dataDirFlag, nodeIDFlag string) (string, string, string, string, error) {
-	var portStr string
-	if portFlag > 0 && portFlag <= 65535 {
-		portStr = strconv.Itoa(portFlag)
+func extractPort(addr string) (string, error) {
+	_, port, err := normalizeAddr(addr)
+	return port, err
+}
+
+type ServerConfig struct {
+	NodeID   string
+	HTTPAddr string
+	TCPAddr  string
+	DataDir  string
+}
+
+func resolveConfig(idFlag, httpFlag, tcpFlag, dataDirFlag, addrFlag string, portFlag int) (*ServerConfig, error) {
+	// 1. Check TCP flag (required)
+	tcpStr := strings.TrimSpace(tcpFlag)
+	if tcpStr == "" {
+		return nil, errors.New("-tcp flag is required (e.g. -tcp :9001)")
+	}
+	normTCP, tcpPort, err := normalizeAddr(tcpStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid -tcp address %q: %w", tcpStr, err)
 	}
 
-	addrStr := strings.TrimSpace(addrFlag)
-	if addrStr != "" {
-		extractedPort, err := extractPort(addrStr)
-		if err != nil && portStr == "" {
-			return "", "", "", "", fmt.Errorf("failed to determine port from addr %q: %w", addrStr, err)
+	// 2. Check HTTP flag (optional)
+	httpStr := strings.TrimSpace(httpFlag)
+	// Fallback to -addr or -port if -http was not explicitly set
+	if httpStr == "" && strings.TrimSpace(addrFlag) != "" {
+		httpStr = strings.TrimSpace(addrFlag)
+	} else if httpStr == "" && portFlag > 0 && portFlag <= 65535 {
+		httpStr = fmt.Sprintf(":%d", portFlag)
+	}
+
+	var normHTTP, httpPort string
+	if httpStr != "" {
+		normHTTP, httpPort, err = normalizeAddr(httpStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -http address %q: %w", httpStr, err)
 		}
-		if portStr == "" {
-			portStr = extractedPort
+	}
+
+	// 3. Resolve Node ID
+	nodeID := strings.TrimSpace(idFlag)
+	if nodeID == "" {
+		if httpPort != "" {
+			nodeID = httpPort
+		} else {
+			nodeID = tcpPort
 		}
-		if !strings.Contains(addrStr, ":") {
-			addrStr = ":" + addrStr
-		}
 	}
 
-	if portStr == "" {
-		portStr = "8001"
-	}
-
-	if addrStr == "" {
-		addrStr = ":" + portStr
-	}
-
+	// 4. Resolve Data Directory
 	dirStr := strings.TrimSpace(dataDirFlag)
 	if dirStr == "" {
-		dirStr = filepath.Join("data", portStr)
+		dirStr = filepath.Join("data", nodeID)
 	}
 
-	idStr := strings.TrimSpace(nodeIDFlag)
-	if idStr == "" {
-		idStr = fmt.Sprintf("node-%s", portStr)
-	}
-
-	return addrStr, dirStr, idStr, portStr, nil
+	return &ServerConfig{
+		NodeID:   nodeID,
+		HTTPAddr: normHTTP,
+		TCPAddr:  normTCP,
+		DataDir:  dirStr,
+	}, nil
 }
 
 func main() {
-	portFlag := flag.Int("port", 0, "HTTP listen port (e.g. 8001)")
-	addrFlag := flag.String("addr", "", "HTTP listen address (e.g. :8001, 127.0.0.1:8001)")
-	dataDirFlag := flag.String("data", "", "Storage directory for WAL and SSTables (default: ./data/<port>)")
-	nodeIDFlag := flag.String("id", "", "Node identifier (default: node-<port>)")
+	idFlag := flag.String("id", "", "Node identifier (e.g. 8001)")
+	httpFlag := flag.String("http", "", "HTTP listen address (optional, e.g. :8001)")
+	tcpFlag := flag.String("tcp", "", "TCP listen address (required, e.g. :9001)")
+	dataDirFlag := flag.String("data", "", "Storage directory for WAL and SSTables (default: ./data/<id>)")
+	addrFlag := flag.String("addr", "", "HTTP listen address alias (optional)")
+	portFlag := flag.Int("port", 0, "HTTP listen port alias (optional)")
 	flag.Parse()
 
-	addr, dataDir, nodeID, _, err := resolveConfig(*portFlag, *addrFlag, *dataDirFlag, *nodeIDFlag)
+	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *dataDirFlag, *addrFlag, *portFlag)
 	if err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
 
-	lsm, err := Open(dataDir, 4096, true)
+	lsm, err := Open(cfg.DataDir, 4096, true)
 	if err != nil {
-		log.Fatalf("Failed to open LSM tree at %s: %v", dataDir, err)
+		log.Fatalf("Failed to open LSM tree at %s: %v", cfg.DataDir, err)
 	}
 	defer lsm.Close()
 
-	srv := &Server{lsm: lsm}
+	tcpListener, err := net.Listen("tcp", cfg.TCPAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on TCP %s: %v", cfg.TCPAddr, err)
+	}
+	defer tcpListener.Close()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /put", srv.add)
-	mux.HandleFunc("GET /get", srv.get)
-	mux.HandleFunc("DELETE /del", srv.delete)
+	go func() {
+		for {
+			conn, err := tcpListener.Accept()
+			if err != nil {
+				return // listener closed during shutdown
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+			}(conn)
+		}
+	}()
 
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	var httpServer *http.Server
+	if cfg.HTTPAddr != "" {
+		srv := &Server{lsm: lsm}
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /put", srv.add)
+		mux.HandleFunc("GET /get", srv.get)
+		mux.HandleFunc("DELETE /del", srv.delete)
+
+		httpServer = &http.Server{
+			Addr:    cfg.HTTPAddr,
+			Handler: mux,
+		}
+
+		go func() {
+			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("HTTP server error: %v", err)
+			}
+		}()
+		log.Printf("Starting node %s on TCP %s, HTTP %s storing data in %s", cfg.NodeID, cfg.TCPAddr, cfg.HTTPAddr, cfg.DataDir)
+	} else {
+		log.Printf("Starting node %s on TCP %s (HTTP disabled) storing data in %s", cfg.NodeID, cfg.TCPAddr, cfg.DataDir)
 	}
 
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		<-stopChan
-		log.Println("Shutting down server...")
+	<-stopChan
+	log.Println("Shutting down server...")
+
+	if httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = server.Shutdown(ctx)
-	}()
-
-	log.Printf("Starting node %s on %s storing data in %s", nodeID, addr, dataDir)
-
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("Server error: %v", err)
+		_ = httpServer.Shutdown(ctx)
 	}
 }

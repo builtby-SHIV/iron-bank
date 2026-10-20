@@ -280,7 +280,6 @@ func main() {
 		}
 	}()
 
-	// ── Network Announcement: announce this node to cluster peers ────────────
 	targets := parsePeersList(*peersFlag, snap.TCPAddr)
 	peerMap.BroadcastAnnouncement(targets, selfInfo)
 
@@ -320,9 +319,14 @@ func main() {
 		log.Printf("[http] listening on %s", snap.HTTPAddr)
 	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if snap.Role == RoleLeader {
+		go ConsistentHeartBeat(peerMap, 1 * time.Second, ctx)
+	}
+	
+	<- ctx.Done()
 
 	log.Println("[node] shutting down…")
 	if httpServer != nil {

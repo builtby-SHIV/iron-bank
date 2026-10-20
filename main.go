@@ -187,12 +187,43 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag string) (*Se
 }
 
 
+// parsePeersList returns a list of target peer TCP addresses, excluding selfTCP.
+// If raw is empty, it defaults to the standard cluster ports (:7001, :7002, :7003).
+func parsePeersList(raw string, selfTCP string) []string {
+	var candidates []string
+	if strings.TrimSpace(raw) != "" {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				norm, _, err := normalizeAddr(p)
+				if err == nil {
+					candidates = append(candidates, norm)
+				} else {
+					candidates = append(candidates, p)
+				}
+			}
+		}
+	} else {
+		candidates = []string{":7001", ":7002", ":7003"}
+	}
+
+	normSelf, _, _ := normalizeAddr(selfTCP)
+	var targets []string
+	for _, c := range candidates {
+		if c != selfTCP && c != normSelf {
+			targets = append(targets, c)
+		}
+	}
+	return targets
+}
+
 func main() {
-	idFlag      := flag.String("id",   "",  "Node identifier")
-	httpFlag    := flag.String("http", "",  "HTTP listen address (optional)")
-	tcpFlag     := flag.String("tcp",  "",  "TCP listen address (required)")
-	roleFlag    := flag.String("role", "",  "Node role: leader | follower | observer")
-	dataDirFlag := flag.String("data", "",  "Storage directory")
+	idFlag      := flag.String("id",    "", "Node identifier")
+	httpFlag    := flag.String("http",  "", "HTTP listen address (optional)")
+	tcpFlag     := flag.String("tcp",   "", "TCP listen address (required)")
+	roleFlag    := flag.String("role",  "", "Node role: leader | follower | observer")
+	dataDirFlag := flag.String("data",  "", "Storage directory")
+	peersFlag   := flag.String("peers", "", "Comma-separated list of peer TCP addresses (e.g. :7001,:7002)")
 	flag.Parse()
 
 	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag)
@@ -231,6 +262,27 @@ func main() {
 	log.Printf("[tcp] listening on %s", snap.TCPAddr)
 
 	peerMap := NewPeerMap()
+	selfInfo := PeerInfo{
+		ID:       snap.ID,
+		HTTPAddr: snap.HTTPAddr,
+		TCPAddr:  snap.TCPAddr,
+		Role:     snap.Role,
+	}
+
+	// ── TCP Accept Loop: receive incoming peer connections & announcements ──
+	go func() {
+		for {
+			conn, err := tcpLn.Accept()
+			if err != nil {
+				return // listener closed during shutdown
+			}
+			go peerMap.HandleTCPConnection(conn, selfInfo)
+		}
+	}()
+
+	// ── Network Announcement: announce this node to cluster peers ────────────
+	targets := parsePeersList(*peersFlag, snap.TCPAddr)
+	peerMap.BroadcastAnnouncement(targets, selfInfo)
 
 	var httpServer *http.Server
 	if snap.HTTPAddr != "" {

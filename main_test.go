@@ -255,6 +255,143 @@ func TestPeerMapOperations(t *testing.T) {
 	}
 }
 
+func TestPeerMapLeaderAndFollowerHelpers(t *testing.T) {
+	// From node 1's perspective: peers are 2 and 3
+	pmLeader := NewPeerMap()
+	pmLeader.Add(PeerInfo{ID: "2", TCPAddr: ":7002", Role: RoleFollower})
+	pmLeader.Add(PeerInfo{ID: "3", TCPAddr: ":7003", Role: RoleFollower})
+
+	// Leader helper: leader wants all followers to send messages to
+	followers := pmLeader.Followers()
+	if len(followers) != 2 {
+		t.Fatalf("expected 2 followers, got %d", len(followers))
+	}
+
+	// Quorum size for 3-node cluster (2 peers + self): majority is 2
+	if q := pmLeader.QuorumSize(true); q != 2 {
+		t.Errorf("QuorumSize(true) for 3-node cluster: got %d, want 2", q)
+	}
+
+	// From node 2's perspective (follower): peers are 1 (leader) and 3 (follower)
+	pmFollower := NewPeerMap()
+	pmFollower.Add(PeerInfo{ID: "1", TCPAddr: ":7001", Role: RoleLeader})
+	pmFollower.Add(PeerInfo{ID: "3", TCPAddr: ":7003", Role: RoleFollower})
+
+	// Follower helper: check who the leader is
+	leader, found := pmFollower.Leader()
+	if !found || leader.ID != "1" {
+		t.Fatalf("expected leader with ID 1, got %+v (found=%v)", leader, found)
+	}
+
+	// Follower helper: start election - get other peers to send vote requests to
+	others := pmFollower.OtherPeers("2")
+	if len(others) != 2 {
+		t.Fatalf("expected 2 other peers for node 2, got %d", len(others))
+	}
+	for _, o := range others {
+		if o.ID == "2" {
+			t.Errorf("other peers should not include self (ID 2)")
+		}
+	}
+}
+
+func TestPeerMapNetworkAnnouncement(t *testing.T) {
+	// Start node 1 TCP listener
+	ln1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln1.Close()
+	addr1 := ln1.Addr().String()
+
+	// Start node 2 TCP listener
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln2.Close()
+	addr2 := ln2.Addr().String()
+
+	pm1 := NewPeerMap()
+	self1 := PeerInfo{ID: "1", HTTPAddr: ":8001", TCPAddr: addr1, Role: RoleLeader}
+
+	pm2 := NewPeerMap()
+	self2 := PeerInfo{ID: "2", HTTPAddr: ":8002", TCPAddr: addr2, Role: RoleFollower}
+
+	// Run accept loops for both nodes
+	go func() {
+		for {
+			conn, err := ln1.Accept()
+			if err != nil {
+				return
+			}
+			go pm1.HandleTCPConnection(conn, self1)
+		}
+	}()
+
+	go func() {
+		for {
+			conn, err := ln2.Accept()
+			if err != nil {
+				return
+			}
+			go pm2.HandleTCPConnection(conn, self2)
+		}
+	}()
+
+	// Node 2 announces itself to Node 1
+	if err := pm2.AnnounceTo(addr1, self2, 1*time.Second); err != nil {
+		t.Fatalf("node 2 failed to announce to node 1: %v", err)
+	}
+
+	// Verify node 1 received node 2's announcement
+	time.Sleep(50 * time.Millisecond)
+	p2, ok := pm1.Get("2")
+	if !ok {
+		t.Fatal("node 1 did not register node 2 in peer map")
+	}
+	if p2.Role != RoleFollower || p2.TCPAddr != addr2 {
+		t.Errorf("node 1 recorded incorrect info for node 2: %+v", p2)
+	}
+
+	// Verify node 2 received node 1's ack and added node 1
+	p1, ok := pm2.Get("1")
+	if !ok {
+		t.Fatal("node 2 did not register node 1 from ack")
+	}
+	if p1.Role != RoleLeader || p1.TCPAddr != addr1 {
+		t.Errorf("node 2 recorded incorrect info for node 1: %+v", p1)
+	}
+
+	// Verify followers list on leader
+	followers := pm1.Followers()
+	if len(followers) != 1 || followers[0].ID != "2" {
+		t.Errorf("pm1 Followers mismatch: %+v", followers)
+	}
+}
+
+func TestParsePeersList(t *testing.T) {
+	// When empty, should default to 7001, 7002, 7003 excluding self
+	defaults := parsePeersList("", ":7001")
+	if len(defaults) != 2 {
+		t.Fatalf("expected 2 default peers, got %v", defaults)
+	}
+	for _, p := range defaults {
+		if p == ":7001" {
+			t.Errorf("default list should not include self :7001")
+		}
+	}
+
+	// Custom list
+	custom := parsePeersList(":7002, :7003, :7004", ":7002")
+	if len(custom) != 2 {
+		t.Fatalf("expected 2 custom peers, got %v", custom)
+	}
+	if custom[0] != ":7003" || custom[1] != ":7004" {
+		t.Errorf("custom peers mismatch: %v", custom)
+	}
+}
+
 // ── Storage isolation ─────────────────────────────────────────────────────────
 
 func TestMultipleProcessesStorageIsolation(t *testing.T) {

@@ -35,12 +35,12 @@ func ParseRole(s string) (string, error) {
 }
 
 type NodeState struct {
-	ID        string   
-	HTTPAddr  string   
-	TCPAddr   string  
-	Role      string   
-	statePath string       
-	mu        sync.RWMutex 
+	ID        string       `json:"id"`
+	HTTPAddr  string       `json:"http_addr"`
+	TCPAddr   string       `json:"tcp_addr"`
+	Role      string       `json:"role"`
+	statePath string       `json:"-"`
+	mu        sync.RWMutex `json:"-"`
 }
 
 func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
@@ -113,6 +113,10 @@ func (ns *NodeState) Save() error {
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(ns.statePath), 0755); err != nil {
+		return fmt.Errorf("creating directory for node state: %w", err)
 	}
 
 	tmp := ns.statePath + ".tmp"

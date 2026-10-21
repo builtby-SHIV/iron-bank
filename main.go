@@ -34,7 +34,7 @@ type NonAddRequest struct {
 
 type AppendEntriesArgs struct {
     Term         uint64
-    LeaderID     int
+    LeaderID     uint64
     PrevLogIndex uint64     // entry just before the new ones
     PrevLogTerm  uint64
     Entries      [] LogEntry // empty for a pure heartbeat
@@ -50,8 +50,19 @@ type AppendEntriesReply struct {
 }
 
 type Server struct {
-	lsm *LSMTree
-	cfg *ServerConfig
+	lsm          *LSMTree
+	cfg          *ServerConfig
+	term 		 uint64
+	votedFor     uint64
+	prevLogIndex uint64
+}
+
+type ServerConfig struct {
+	NodeID   string
+	HTTPAddr string 
+	TCPAddr  string 
+	DataDir  string
+	Role     string
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -145,14 +156,6 @@ func normalizeAddr(addr string) (string, string, error) {
 func extractPort(addr string) (string, error) {
 	_, port, err := normalizeAddr(addr)
 	return port, err
-}
-
-type ServerConfig struct {
-	NodeID   string
-	HTTPAddr string 
-	TCPAddr  string 
-	DataDir  string
-	Role     string
 }
 
 func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag string) (*ServerConfig, error) {
@@ -301,8 +304,20 @@ func main() {
 	peerMap.BroadcastAnnouncement(targets, selfInfo)
 
 	var httpServer *http.Server
+
+	entry, err := lsm.wal.getLastEntryInLog()
+	if err != nil {
+		//handle this later on
+	}
+
 	if snap.HTTPAddr != "" {
-		srv := &Server{ lsm: lsm, cfg : cfg }
+		srv := &Server{ 
+			lsm: lsm, 
+			cfg: cfg,
+			term: entry.Term,
+			prevLogIndex: entry.Index,
+			votedFor: entry.VotedFor,
+		}
 		mux := http.NewServeMux()
 
 		mux.HandleFunc("POST /put",   srv.add)

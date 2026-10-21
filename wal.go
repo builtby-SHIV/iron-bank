@@ -159,68 +159,38 @@ func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
 		return err
 	}
 
-	w.lastSequenceNo++
+	nextSeq := w.lastSequenceNo + 1
+
 	entry := &LogEntry{
-		Index:             w.lastSequenceNo,
-		Term: 			   w.term,
-		Key:               key,
-		Value:             val,
-		Command:           cmd,
-		CRC:               calculateCRC(val, w.lastSequenceNo),
+		Index:    nextSeq,
+		Term:     w.term,
+		VotedFor: w.VotedFor,
+		Key:      key,
+		Value:    val,
+		Command:  cmd,
+		CRC:      calculateCRC(val, nextSeq),
 	}
 
 	data := MustMarshal(entry)
-	if err := w.writeToBuffer(data); err != nil {
+
+	if err := binary.Write(w.bufWriter, binary.LittleEndian, int64(len(data))); err != nil {
 		return err
 	}
-
-	if err := w.bufWriter.Flush(); err != nil {
-		return err
-	}
-	if w.shouldFsync {
-		if err := w.currentSegment.Sync(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (w *WAL) writeEntry(data []byte) error {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-
-	if err := w.rotateIfNeeded(); err != nil {
-		return err
-	}
-
-	w.lastSequenceNo++
-	if err := w.writeToBuffer(data); err != nil {
-		return err
-	}
-
-	if err := w.bufWriter.Flush(); err != nil {
-		return err
-	}
-	if w.shouldFsync {
-		if err := w.currentSegment.Sync(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (w *WAL) writeToBuffer(data []byte) error {
-	size := int64(len(data))
-	if err := binary.Write(w.bufWriter, binary.LittleEndian, size); err != nil {
-		return err
-	}
-
 	if _, err := w.bufWriter.Write(data); err != nil {
 		return err
 	}
 
+	if err := w.bufWriter.Flush(); err != nil {
+		return err
+	}
+
+	if w.shouldFsync {
+		if err := w.currentSegment.Sync(); err != nil {
+			return err
+		}
+	}
+
+	w.lastSequenceNo = nextSeq
 	return nil
 }
 
@@ -665,4 +635,3 @@ func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*LogEntry)
 
 	return nil
 }
-

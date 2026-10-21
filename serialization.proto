@@ -28,10 +28,11 @@ enum Command {
   WRITE_SST = 2;
 }
 
-message WAL_Entry {
-    uint64   logSequenceNumber = 1;
-    string key = 2;
-    optional bytes value = 3;
-    uint32  CRC = 4;
-    Command command = 5;
+message LOG_Entry {
+    uint64   Index = 1;
+    uint64 Term = 2;
+    string key = 3;
+    optional bytes value = 4;
+    uint32  CRC = 5;
+    Command command = 6;
 }

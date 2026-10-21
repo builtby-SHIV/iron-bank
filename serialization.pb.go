@@ -286,7 +286,7 @@ func (x *LSMEntry) GetTimestamp() int64 {
 	return 0
 }
 
-type Log_Entry struct {
+type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
 	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
@@ -298,20 +298,20 @@ type Log_Entry struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Log_Entry) Reset() {
-	*x = Log_Entry{}
+func (x *LogEntry) Reset() {
+	*x = LogEntry{}
 	mi := &file_serialization_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Log_Entry) String() string {
+func (x *LogEntry) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Log_Entry) ProtoMessage() {}
+func (*LogEntry) ProtoMessage() {}
 
-func (x *Log_Entry) ProtoReflect() protoreflect.Message {
+func (x *LogEntry) ProtoReflect() protoreflect.Message {
 	mi := &file_serialization_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -323,47 +323,47 @@ func (x *Log_Entry) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Log_Entry.ProtoReflect.Descriptor instead.
-func (*Log_Entry) Descriptor() ([]byte, []int) {
+// Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
+func (*LogEntry) Descriptor() ([]byte, []int) {
 	return file_serialization_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *Log_Entry) GetIndex() uint64 {
+func (x *LogEntry) GetIndex() uint64 {
 	if x != nil {
 		return x.Index
 	}
 	return 0
 }
 
-func (x *Log_Entry) GetTerm() uint64 {
+func (x *LogEntry) GetTerm() uint64 {
 	if x != nil {
 		return x.Term
 	}
 	return 0
 }
 
-func (x *Log_Entry) GetKey() string {
+func (x *LogEntry) GetKey() string {
 	if x != nil {
 		return x.Key
 	}
 	return ""
 }
 
-func (x *Log_Entry) GetValue() []byte {
+func (x *LogEntry) GetValue() []byte {
 	if x != nil {
 		return x.Value
 	}
 	return nil
 }
 
-func (x *Log_Entry) GetCRC() uint32 {
+func (x *LogEntry) GetCRC() uint32 {
 	if x != nil {
 		return x.CRC
 	}
 	return 0
 }
 
-func (x *Log_Entry) GetCommand() Command {
+func (x *LogEntry) GetCommand() Command {
 	if x != nil {
 		return x.Command
 	}
@@ -389,8 +389,8 @@ const file_serialization_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\x0e2\b.CommandR\acommand\x12\x19\n" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
-	"\x06_value\"\xa2\x01\n" +
-	"\tLog_Entry\x12\x14\n" +
+	"\x06_value\"\xa1\x01\n" +
+	"\bLogEntry\x12\x14\n" +
 	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x12\n" +
 	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
@@ -424,12 +424,12 @@ var file_serialization_proto_goTypes = []any{
 	(*IndexEntry)(nil),  // 2: IndexEntry
 	(*Index)(nil),       // 3: Index
 	(*LSMEntry)(nil),    // 4: LSMEntry
-	(*Log_Entry)(nil),   // 5: Log_Entry
+	(*LogEntry)(nil),    // 5: LogEntry
 }
 var file_serialization_proto_depIdxs = []int32{
 	2, // 0: Index.entries:type_name -> IndexEntry
 	0, // 1: LSMEntry.command:type_name -> Command
-	0, // 2: Log_Entry.command:type_name -> Command
+	0, // 2: LogEntry.command:type_name -> Command
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name

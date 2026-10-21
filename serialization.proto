@@ -28,7 +28,7 @@ enum Command {
   WRITE_SST = 2;
 }
 
-message LOG_Entry {
+message Log_Entry {
     uint64   Index = 1;
     uint64 Term = 2;
     string key = 3;

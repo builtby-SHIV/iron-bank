@@ -32,9 +32,26 @@ type NonAddRequest struct {
 	Key string `json:"key"`
 }
 
+type AppendEntriesArgs struct {
+    Term         uint64
+    LeaderID     int
+    PrevLogIndex uint64     // entry just before the new ones
+    PrevLogTerm  uint64
+    Entries      [] LogEntry // empty for a pure heartbeat
+    LeaderCommit uint64     // leader's commitIndex
+}
+
+type AppendEntriesReply struct {
+    Term    uint64
+    Success bool
+    // optional, speeds up repair after a mismatch
+    ConflictIndex uint64
+    ConflictTerm  uint64
+}
 
 type Server struct {
 	lsm *LSMTree
+	cfg *ServerConfig
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +240,7 @@ func main() {
 	tcpFlag     := flag.String("tcp",   "", "TCP listen address (required)")
 	roleFlag    := flag.String("role",  "", "Node role: leader | follower | observer")
 	dataDirFlag := flag.String("data",  "", "Storage directory")
-	peersFlag   := flag.String("peers", "", "Comma-separated list of peer TCP addresses (e.g. :7001,:7002)")
+	peersFlag   := flag.String("peers", "", "List of peer TCP addresses")
 	flag.Parse()
 
 	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag)
@@ -285,7 +302,7 @@ func main() {
 
 	var httpServer *http.Server
 	if snap.HTTPAddr != "" {
-		srv := &Server{lsm: lsm}
+		srv := &Server{ lsm: lsm, cfg : cfg }
 		mux := http.NewServeMux()
 
 		mux.HandleFunc("POST /put",   srv.add)
@@ -322,10 +339,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if snap.Role == RoleLeader {
-		go ConsistentHeartBeat(peerMap, 1 * time.Second, ctx)
-	}
-	
 	<- ctx.Done()
 
 	log.Println("[node] shutting down…")

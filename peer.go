@@ -215,35 +215,3 @@ func (pm *PeerMap) String() string {
 	}
 	return b.String()
 }
-
-func ConsistentHeartBeat(pm *PeerMap, interval time.Duration, ctx context.Context) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <- ctx.Done():
-			fmt.Println("[Pinger] Context cancellation received. Exiting loop safely...")
-			return
-		case <- ticker.C:
-			followers := pm.Followers()
-			
-			var wg sync.WaitGroup
-
-			for _, f := range followers {
-				wg.Add(1)
-				go func (addr string) {
-					conn, err := net.Dial("tcp", addr)
-					if err != nil {
-						fmt.Println("[PING FAIL] %s", addr)
-						return
-					}
-
-					fmt.Println("[PING OK]   %s", addr)
-				}(f.TCPAddr)
-			}
-
-			wg.Wait()
-		}
-	}
-}

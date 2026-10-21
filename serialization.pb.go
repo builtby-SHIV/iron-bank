@@ -290,10 +290,11 @@ type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
 	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
-	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
-	Value         []byte                 `protobuf:"bytes,4,opt,name=value,proto3,oneof" json:"value,omitempty"`
-	CRC           uint32                 `protobuf:"varint,5,opt,name=CRC,proto3" json:"CRC,omitempty"`
-	Command       Command                `protobuf:"varint,6,opt,name=command,proto3,enum=Command" json:"command,omitempty"`
+	VotedFor      uint64                 `protobuf:"varint,3,opt,name=VotedFor,proto3" json:"VotedFor,omitempty"`
+	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,5,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	CRC           uint32                 `protobuf:"varint,6,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Command       Command                `protobuf:"varint,7,opt,name=command,proto3,enum=Command" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -338,6 +339,13 @@ func (x *LogEntry) GetIndex() uint64 {
 func (x *LogEntry) GetTerm() uint64 {
 	if x != nil {
 		return x.Term
+	}
+	return 0
+}
+
+func (x *LogEntry) GetVotedFor() uint64 {
+	if x != nil {
+		return x.VotedFor
 	}
 	return 0
 }
@@ -389,14 +397,15 @@ const file_serialization_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\x0e2\b.CommandR\acommand\x12\x19\n" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
-	"\x06_value\"\xa1\x01\n" +
+	"\x06_value\"\xbd\x01\n" +
 	"\bLogEntry\x12\x14\n" +
 	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x12\n" +
-	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x10\n" +
-	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
-	"\x05value\x18\x04 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
-	"\x03CRC\x18\x05 \x01(\rR\x03CRC\x12\"\n" +
-	"\acommand\x18\x06 \x01(\x0e2\b.CommandR\acommandB\b\n" +
+	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x1a\n" +
+	"\bVotedFor\x18\x03 \x01(\x04R\bVotedFor\x12\x10\n" +
+	"\x03key\x18\x04 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x05 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
+	"\x03CRC\x18\x06 \x01(\rR\x03CRC\x12\"\n" +
+	"\acommand\x18\a \x01(\x0e2\b.CommandR\acommandB\b\n" +
 	"\x06_value*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +

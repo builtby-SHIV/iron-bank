@@ -147,8 +147,8 @@ func calculateCRC(val []byte, seq uint64) uint32 {
 	return crc32.ChecksumIEEE(append(val, buf...))
 }
 
-func verifyCRC(entry *WAL_Entry) bool {
-	return entry.CRC == calculateCRC(entry.GetValue(), entry.GetLogSequenceNumber())
+func verifyCRC(entry *LogEntry) bool {
+	return entry.CRC == calculateCRC(entry.GetValue(), entry.GetIndex())
 }
 
 func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
@@ -160,8 +160,9 @@ func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
 	}
 
 	w.lastSequenceNo++
-	entry := &WAL_Entry{
-		LogSequenceNumber: w.lastSequenceNo,
+	entry := &LogEntry{
+		Index:             w.lastSequenceNo,
+		Term: 			   w.term,
 		Key:               key,
 		Value:             val,
 		Command:           cmd,
@@ -363,14 +364,14 @@ func (wal *WAL) getLastSequenceNo() (uint64, error) {
 		entry, err := wal.getLastEntryInFile(file)
 		_ = file.Close()
 		if err == nil && entry != nil {
-			return entry.GetLogSequenceNumber(), nil
+			return entry.GetIndex(), nil
 		}
 	}
 
 	return 0, nil
 }
 
-func (wal *WAL) getLastEntryInFile(file *os.File) (*WAL_Entry, error) {
+func (wal *WAL) getLastEntryInFile(file *os.File) (*LogEntry, error) {
 	var previousSize int64
 	var offset int64
 
@@ -409,7 +410,7 @@ func (wal *WAL) getLastEntryInFile(file *os.File) (*WAL_Entry, error) {
 	}
 }
 
-func (wal *WAL) getLastEntryInLog() (*WAL_Entry, error) {
+func (wal *WAL) getLastEntryInLog() (*LogEntry, error) {
 	file, err := os.OpenFile(wal.currentSegment.Name(), os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -418,8 +419,8 @@ func (wal *WAL) getLastEntryInLog() (*WAL_Entry, error) {
 	return wal.getLastEntryInFile(file)
 }
 
-func (w *WAL) readAllEntries(file *os.File) ([]*WAL_Entry, error) {
-	var entries []*WAL_Entry
+func (w *WAL) readAllEntries(file *os.File) ([]*LogEntry, error) {
+	var entries []*LogEntry
 
 	var size int64
 	for {
@@ -447,8 +448,8 @@ func (w *WAL) readAllEntries(file *os.File) ([]*WAL_Entry, error) {
 	return entries, nil
 }
 
-func unmarshalAndVerify(data []byte) (*WAL_Entry, error) {
-	var entry WAL_Entry
+func unmarshalAndVerify(data []byte) (*LogEntry, error) {
+	var entry LogEntry
 	if err := proto.Unmarshal(data, &entry); err != nil {
 		return nil, err
 	}
@@ -459,15 +460,11 @@ func unmarshalAndVerify(data []byte) (*WAL_Entry, error) {
 	return &entry, nil
 }
 
-func (w *WAL) ReadAll() ([]*WAL_Entry, error) {
+func (w *WAL) ReadAll() ([]*LogEntry, error) {
 	return w.readAllFromOffset(-1)
 }
 
-func (w *WAL) readAll() ([]*WAL_Entry, error) {
-	return w.ReadAll()
-}
-
-func (w *WAL) readAllFromOffset(offset int) ([]*WAL_Entry, error) {
+func (w *WAL) readAllFromOffset(offset int) ([]*LogEntry, error) {
 	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
 	if err != nil {
 		return nil, err
@@ -497,7 +494,7 @@ func (w *WAL) readAllFromOffset(offset int) ([]*WAL_Entry, error) {
 		return cmp.Compare(a.id, b.id)
 	})
 
-	var entries []*WAL_Entry
+	var entries []*LogEntry
 
 	for _, seg := range segments {
 		file, err := os.OpenFile(seg.path, os.O_RDONLY, 0644)
@@ -552,7 +549,7 @@ func (wal *WAL) keepSyncing() {
 	}
 }
 
-func (wal *WAL) Repair() ([]*WAL_Entry, error) {
+func (wal *WAL) Repair() ([]*LogEntry, error) {
 	wal.lock.Lock()
 	defer wal.lock.Unlock()
 
@@ -579,7 +576,7 @@ func (wal *WAL) Repair() ([]*WAL_Entry, error) {
 		return nil, err
 	}
 
-	var entries []*WAL_Entry
+	var entries []*LogEntry
 	needsRepair := false
 
 	for {
@@ -598,7 +595,7 @@ func (wal *WAL) Repair() ([]*WAL_Entry, error) {
 			break
 		}
 
-		var entry WAL_Entry
+		var entry LogEntry
 		if err := proto.Unmarshal(data, &entry); err != nil {
 			needsRepair = true
 			break
@@ -622,7 +619,7 @@ func (wal *WAL) Repair() ([]*WAL_Entry, error) {
 	return entries, nil
 }
 
-func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*WAL_Entry) error {
+func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*LogEntry) error {
 	tempFilePath := fmt.Sprintf("%s.tmp", targetFilePath)
 	tempFile, err := os.OpenFile(tempFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
@@ -668,3 +665,4 @@ func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*WAL_Entry
 
 	return nil
 }
+

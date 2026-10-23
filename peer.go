@@ -16,11 +16,6 @@ import (
 
 type MessageType string
 
-const (
-	MsgAnnounce    MessageType = "ANNOUNCE"
-	MsgAnnounceAck MessageType = "ANNOUNCE_ACK"
-)
-
 type ClusterMessage struct {
 	Type     MessageType `json:"type"`
 	SenderID string      `json:"sender_id"`
@@ -30,11 +25,11 @@ type ClusterMessage struct {
 }
 
 type PeerInfo struct {
-	ID       string    `json:"id"`
-	HTTPAddr string    `json:"http_addr"`
-	TCPAddr  string    `json:"tcp_addr"`
-	Role     string    `json:"role"`
-	LastSeen time.Time `json:"last_seen,omitempty"`
+	ID       string    
+	HTTPAddr string    
+	TCPAddr  string    
+	Role     string    
+	LastSeen time.Time 
 }
 
 type PeerMap struct {
@@ -42,8 +37,19 @@ type PeerMap struct {
 	peers map[string]*PeerInfo
 }
 
+const (
+	MsgAnnounce    MessageType = "ANNOUNCE"
+	MsgAnnounceAck MessageType = "ANNOUNCE_ACK"
+)
+
 func NewPeerMap() *PeerMap {
 	return &PeerMap{peers: make(map[string]*PeerInfo)}
+}
+
+func (pm *PeerMap) Len() int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return len(pm.peers)
 }
 
 func (pm *PeerMap) Add(p PeerInfo) {
@@ -193,9 +199,18 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Dura
 		log.Printf("[peers] announced to peer %s (%s, %s)", reply.SenderID, reply.TCPAddr, reply.Role)
 	}
 
-	send := make(chan *AppendEntriesArgs)
-	senderId, err := strconv.Atoi(reply.SenderID)
-	go establishTCPConnection(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second) )
+	if reply.Role == RoleFollower && self.Role == RoleLeader {
+		send := make(chan *AppendEntriesArgs)
+		senderId, err := strconv.Atoi(reply.SenderID)
+		if err != nil {
+			fmt.Printf("Error with the reply's senderId %v\n", err.Error())
+			return err
+		}
+		go establishTCPConnection(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second))
+	} else if reply.Role == RoleLeader && self.Role == RoleFollower {
+		go listenToLeader(&self)
+	} 
+
 	return nil
 }
 
@@ -281,6 +296,44 @@ func establishTCPConnection(targetTCP string, send chan *AppendEntriesArgs, ctx 
 			
 		case t := <- ticker.C:
 			fmt.Printf("Executed at: %s\n", t.Format("15:04:05"))
+		case <- ctx.Done():
+			fmt.Println("[Goroutine] Context cancelled cleaning up and exiting...")
+			return ctx.Err()
 		}
 	}
+}
+
+func listenToLeader(self *PeerInfo) {
+	tcpLn, err := net.Listen("tcp", self.TCPAddr)
+	if err != nil {
+		fmt.Println("error on starting a TCP listener:", err)
+		return
+	}
+	defer tcpLn.Close()
+
+	conn, err := tcpLn.Accept()
+	if err != nil {
+		fmt.Println("error on listening for a TCP connection:", err)
+		return
+	}
+	header := make([]byte, 8)
+	_, err = io.ReadFull(conn, header) 
+	if err != nil {
+		fmt.Println("Connection closed or read error:", err)
+		return
+	}
+	length := binary.BigEndian.Uint32(header)
+
+	payload := make([]byte, length)
+	_, err = io.ReadFull(conn, payload)
+	if err != nil {
+		fmt.Println("Failed to read complete payload:", err)
+		return
+	}
+
+	data := &AppendEntriesArgs{}
+	MustUnmarshal(payload, data)
+
+	_ = data
+	// if data.Term < ...
 }

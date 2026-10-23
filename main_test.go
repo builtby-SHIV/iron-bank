@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -153,65 +154,41 @@ func TestResolveConfig(t *testing.T) {
 
 // ── NodeState ─────────────────────────────────────────────────────────────────
 
-func TestNodeStatePersistence(t *testing.T) {
-	dir := t.TempDir()
-
-	// First run: no file yet.
-	ns, err := LoadOrInitNodeState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ns.MergeFlags("1", ":8001", ":7001", RoleLeader)
-	if err := ns.Save(); err != nil {
-		t.Fatal(err)
+func TestNodeStateModifyNodeState(t *testing.T) {
+	ns := NewNodeState("1", ":8001", ":7001", RoleFollower, 0, -1)
+	snap := ns.Snapshot()
+	if snap.ID != "1" || snap.Role != RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
+		t.Fatalf("unexpected initial snapshot: %+v", snap)
 	}
 
-	// Second run: file exists, values should be restored.
-	ns2, err := LoadOrInitNodeState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap := ns2.Snapshot()
-	if snap.ID != "1" || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" || snap.Role != RoleLeader {
-		t.Errorf("persisted state mismatch: %+v", snap)
+	ns.ModifyNodeState(3, 2)
+	snap = ns.Snapshot()
+	if snap.Term != 3 || snap.VotedFor != 2 {
+		t.Errorf("expected term=3, votedFor=2, got %+v", snap)
 	}
 }
 
-func TestNodeStateMergeFlags_CLIWins(t *testing.T) {
-	dir := t.TempDir()
-
-	ns, _ := LoadOrInitNodeState(dir)
+func TestNodeStateMergeFlags(t *testing.T) {
+	ns := &NodeState{}
 	ns.MergeFlags("1", ":8001", ":7001", RoleFollower)
-	_ = ns.Save()
-
-	// Reload and override only role via CLI.
-	ns2, _ := LoadOrInitNodeState(dir)
-	ns2.MergeFlags("", "", "", RoleLeader)
-	snap := ns2.Snapshot()
+	ns.MergeFlags("", "", "", RoleLeader)
+	snap := ns.Snapshot()
 
 	if snap.Role != RoleLeader {
-		t.Errorf("CLI role should win: got %q", snap.Role)
+		t.Errorf("expected role=%q, got %q", RoleLeader, snap.Role)
 	}
-	// Other fields should survive from disk.
-	if snap.ID != "1" || snap.HTTPAddr != ":8001" {
-		t.Errorf("disk fields should be preserved: %+v", snap)
+	if snap.ID != "1" || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" {
+		t.Errorf("fields should be preserved: %+v", snap)
 	}
 }
 
 func TestNodeStateUpdateRole(t *testing.T) {
-	dir := t.TempDir()
-	ns, _ := LoadOrInitNodeState(dir)
-	ns.MergeFlags("1", "", ":7001", RoleFollower)
-	_ = ns.Save()
-
+	ns := &NodeState{ID: "1", Role: RoleFollower}
 	if err := ns.UpdateRole(RoleLeader); err != nil {
 		t.Fatal(err)
 	}
-
-	// Reload and confirm role was persisted.
-	ns2, _ := LoadOrInitNodeState(dir)
-	if ns2.Snapshot().Role != RoleLeader {
-		t.Error("role not persisted after UpdateRole")
+	if ns.Snapshot().Role != RoleLeader {
+		t.Error("role not updated after UpdateRole")
 	}
 }
 
@@ -340,7 +317,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	}()
 
 	// Node 2 announces itself to Node 1
-	if err := pm2.AnnounceTo(addr1, self2, 1*time.Second); err != nil {
+	if err := pm2.AnnounceTo(addr1, self2, 1*time.Second, context.Background()); err != nil {
 		t.Fatalf("node 2 failed to announce to node 1: %v", err)
 	}
 
@@ -450,9 +427,12 @@ func TestMultipleProcessesStorageIsolation(t *testing.T) {
 func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	base := t.TempDir()
 
-	ns, _ := LoadOrInitNodeState(base)
-	ns.MergeFlags("1", ":28001", ":27001", RoleLeader)
-	_ = ns.Save()
+	ns := &NodeState{
+		ID:       "1",
+		HTTPAddr: ":28001",
+		TCPAddr:  ":27001",
+		Role:     RoleLeader,
+	}
 
 	lsm, err := Open(filepath.Join(base, "lsm"), 4096, true)
 	if err != nil {

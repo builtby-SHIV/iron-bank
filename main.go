@@ -33,7 +33,6 @@ type NonAddRequest struct {
 
 type Server struct {
 	lsm          *LSMTree
-	cfg          *ServerConfig
 	term 		 uint64
 	votedFor     int64
 	prevLogIndex uint64
@@ -237,13 +236,11 @@ func main() {
 		log.Fatalf("[startup] create data dir %s: %v", cfg.DataDir, err)
 	}
 
-	ns, err := LoadOrInitNodeState(cfg.DataDir)
-	if err != nil {
-		log.Fatalf("[startup] load node state: %v", err)
-	}
-	ns.MergeFlags(cfg.NodeID, cfg.HTTPAddr, cfg.TCPAddr, cfg.Role)
-	if err := ns.Save(); err != nil {
-		log.Fatalf("[startup] save node state: %v", err)
+	ns := &NodeState{
+		ID:       cfg.NodeID,
+		HTTPAddr: cfg.HTTPAddr,
+		TCPAddr:  cfg.TCPAddr,
+		Role:     cfg.Role,
 	}
 
 	snap := ns.Snapshot()
@@ -262,6 +259,15 @@ func main() {
 	}
 	defer tcpLn.Close()
 	log.Printf("[tcp] listening on %s", snap.TCPAddr)
+
+	entry, err := lsm.wal.getLastEntryInLog()
+	if err != nil {
+		//handle this later on
+	}
+	if entry != nil {
+		ns.ModifyNodeState(entry.Term, entry.VotedFor)
+		snap = ns.Snapshot()
+	}
 
 	peerMap := NewPeerMap()
 	selfInfo := PeerInfo{
@@ -290,18 +296,14 @@ func main() {
 
 	var httpServer *http.Server
 
-	entry, err := lsm.wal.getLastEntryInLog()
-	if err != nil {
-		//handle this later on
-	}
-
 	if snap.HTTPAddr != "" {
 		srv := &Server{ 
-			lsm: lsm, 
-			cfg: cfg,
-			term: entry.Term,
-			prevLogIndex: entry.Index,
-			votedFor: entry.VotedFor,
+			lsm:          lsm, 
+			term:         snap.Term,
+			votedFor:     snap.VotedFor,
+		}
+		if entry != nil {
+			srv.prevLogIndex = entry.Index
 		}
 		mux := http.NewServeMux()
 

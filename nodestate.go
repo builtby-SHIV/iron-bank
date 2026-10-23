@@ -1,22 +1,16 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 )
 
 const (
-	RoleLeader = "leader"
+	RoleLeader   = "leader"
 	RoleFollower = "follower"
 	RoleObserver = "observer"
-	RoleUnknown = "unknown"
-
-	nodeStateFile = "node.json"
+	RoleUnknown  = "unknown"
 )
 
 func ParseRole(s string) (string, error) {
@@ -35,31 +29,24 @@ func ParseRole(s string) (string, error) {
 }
 
 type NodeState struct {
-	ID        string       
-	HTTPAddr  string       
-	TCPAddr   string       
-	Role      string       
-	statePath string       
-	mu        sync.RWMutex 
+	ID       string
+	HTTPAddr string
+	TCPAddr  string
+	Role     string
+	Term     uint64
+	VotedFor int64
+	mu       sync.RWMutex
 }
 
-func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
-	statePath := filepath.Join(dataDir, nodeStateFile)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &NodeState{statePath: statePath}, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", statePath, err)
+func NewNodeState(id, httpAddr, tcpAddr, role string, term uint64, votedFor int64) *NodeState {
+	return &NodeState{
+		ID:       id,
+		HTTPAddr: httpAddr,
+		TCPAddr:  tcpAddr,
+		Role:     role,
+		Term:     term,
+		VotedFor: votedFor,
 	}
-
-	var ns NodeState
-	if err := json.Unmarshal(data, &ns); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", statePath, err)
-	}
-	ns.statePath = statePath
-	return &ns, nil
 }
 
 func (ns *NodeState) MergeFlags(id, httpAddr, tcpAddr string, role string) {
@@ -82,11 +69,28 @@ func (ns *NodeState) MergeFlags(id, httpAddr, tcpAddr string, role string) {
 	}
 }
 
+func (ns *NodeState) ModifyNodeState(term uint64, votedFor int64) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	ns.Term = term
+	ns.VotedFor = votedFor
+}
+
+func (ns *NodeState) Modify(role string, term uint64, votedFor int64) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	if role != "" {
+		ns.Role = role
+	}
+	ns.Term = term
+	ns.VotedFor = votedFor
+}
+
 func (ns *NodeState) UpdateRole(role string) error {
 	ns.mu.Lock()
+	defer ns.mu.Unlock()
 	ns.Role = role
-	ns.mu.Unlock()
-	return ns.Save()
+	return nil
 }
 
 func (ns *NodeState) Snapshot() NodeState {
@@ -97,35 +101,12 @@ func (ns *NodeState) Snapshot() NodeState {
 		HTTPAddr: ns.HTTPAddr,
 		TCPAddr:  ns.TCPAddr,
 		Role:     ns.Role,
+		Term:     ns.Term,
+		VotedFor: ns.VotedFor,
 	}
 }
 
 func (ns *NodeState) Save() error {
-	ns.mu.RLock()
-	payload := struct {
-		ID       string   
-		HTTPAddr string   
-		TCPAddr  string   
-		Role     string   
-	}{ID: ns.ID, HTTPAddr: ns.HTTPAddr, TCPAddr: ns.TCPAddr, Role: ns.Role}
-	ns.mu.RUnlock()
-
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(ns.statePath), 0755); err != nil {
-		return fmt.Errorf("creating directory for node state: %w", err)
-	}
-
-	tmp := ns.statePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("writing node state: %w", err)
-	}
-	if err := os.Rename(tmp, ns.statePath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("committing node state: %w", err)
-	}
 	return nil
 }
+

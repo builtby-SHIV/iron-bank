@@ -240,7 +240,7 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 	var dialer net.Dialer
 	var conn net.Conn
 	var err error
-	var PrevLogIndex, PrevLogTerm uint64
+	var PrevLogIndex, PrevLogTerm, LeaderCommit uint64
 
 	for {
 		conn, err = dialer.DialContext(ctx, "tcp", targetTCP)
@@ -258,6 +258,7 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 		case data := <- send:
 			PrevLogIndex = data.PrevLogIndex
 			PrevLogTerm = data.PrevLogIndex
+			LeaderCommit = data.LeaderCommit
 
 			payload := MustMarshal(data)
 
@@ -307,6 +308,8 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 				LeaderID: self.ID,
 				PrevLogIndex: PrevLogIndex,
 				PrevLogTerm: PrevLogTerm,
+				LeaderCommit: LeaderCommit,
+				Entries: [] *LogEntry{},
 			}
 			payload := MustMarshal(emptyPayload)
 			size := uint64(len(payload))

@@ -52,3 +52,8 @@ message AppendEntriesReply {
     uint64 ConflictTerm = 3;
     bool Success = 4;
 }
+
+message RaftState {
+    uint64 Term = 1;
+    int64 VoteFor = 2;
+}

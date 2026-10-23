@@ -514,6 +514,58 @@ func (x *AppendEntriesReply) GetSuccess() bool {
 	return false
 }
 
+type RaftState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
+	VoteFor       int64                  `protobuf:"varint,2,opt,name=VoteFor,proto3" json:"VoteFor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RaftState) Reset() {
+	*x = RaftState{}
+	mi := &file_serialization_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RaftState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RaftState) ProtoMessage() {}
+
+func (x *RaftState) ProtoReflect() protoreflect.Message {
+	mi := &file_serialization_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RaftState.ProtoReflect.Descriptor instead.
+func (*RaftState) Descriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RaftState) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *RaftState) GetVoteFor() int64 {
+	if x != nil {
+		return x.VoteFor
+	}
+	return 0
+}
+
 var File_serialization_proto protoreflect.FileDescriptor
 
 const file_serialization_proto_rawDesc = "" +
@@ -552,7 +604,10 @@ const file_serialization_proto_rawDesc = "" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12$\n" +
 	"\rConflictIndex\x18\x02 \x01(\x04R\rConflictIndex\x12\"\n" +
 	"\fConflictTerm\x18\x03 \x01(\x04R\fConflictTerm\x12\x18\n" +
-	"\aSuccess\x18\x04 \x01(\bR\aSuccess*-\n" +
+	"\aSuccess\x18\x04 \x01(\bR\aSuccess\"9\n" +
+	"\tRaftState\x12\x12\n" +
+	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x18\n" +
+	"\aVoteFor\x18\x02 \x01(\x03R\aVoteFor*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
@@ -572,7 +627,7 @@ func file_serialization_proto_rawDescGZIP() []byte {
 }
 
 var file_serialization_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_serialization_proto_goTypes = []any{
 	(Command)(0),               // 0: proto.Command
 	(*BloomFilter)(nil),        // 1: proto.BloomFilter
@@ -582,6 +637,7 @@ var file_serialization_proto_goTypes = []any{
 	(*LogEntry)(nil),           // 5: proto.LogEntry
 	(*AppendEntriesArgs)(nil),  // 6: proto.AppendEntriesArgs
 	(*AppendEntriesReply)(nil), // 7: proto.AppendEntriesReply
+	(*RaftState)(nil),          // 8: proto.RaftState
 }
 var file_serialization_proto_depIdxs = []int32{
 	2, // 0: proto.Index.entries:type_name -> proto.IndexEntry
@@ -608,7 +664,7 @@ func file_serialization_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_serialization_proto_rawDesc), len(file_serialization_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

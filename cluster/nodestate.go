@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"iron-bank/proto"
 	"strings"
 	"sync"
 )
@@ -12,6 +13,16 @@ const (
 	RoleObserver = "observer"
 	RoleUnknown  = "unknown"
 )
+
+type NodeState struct {
+	ID        uint64
+	HTTPAddr  string
+	TCPAddr   string
+	Role      string
+	statePath string
+	raftState *proto.RaftState
+	mu        sync.RWMutex
+}
 
 func ParseRole(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -28,24 +39,13 @@ func ParseRole(s string) (string, error) {
 	}
 }
 
-type NodeState struct {
-	ID       uint64
-	HTTPAddr string
-	TCPAddr  string
-	Role     string
-	Term     uint64
-	VotedFor int64
-	mu       sync.RWMutex
-}
-
-func NewNodeState(id uint64, httpAddr, tcpAddr, role string, term uint64, votedFor int64) *NodeState {
+func NewNodeState(id uint64, httpAddr, tcpAddr, role string, raftState *proto.RaftState) *NodeState {
 	return &NodeState{
-		ID:       id,
-		HTTPAddr: httpAddr,
-		TCPAddr:  tcpAddr,
-		Role:     role,
-		Term:     term,
-		VotedFor: votedFor,
+		ID:        id,
+		HTTPAddr:  httpAddr,
+		TCPAddr:   tcpAddr,
+		Role:      role,
+		raftState: raftState,
 	}
 }
 
@@ -69,21 +69,13 @@ func (ns *NodeState) MergeFlags(id uint64, httpAddr, tcpAddr string, role string
 	}
 }
 
-// func (ns *NodeState) ModifyNodeState(term uint64, votedFor int64) {
-// 	ns.mu.Lock()
-// 	defer ns.mu.Unlock()
-// 	ns.Term = term
-// 	ns.VotedFor = votedFor
-// }
-
-func (ns *NodeState) Modify(role string, term uint64, votedFor int64) {
+func (ns *NodeState) Modify(role string, newRaftState *proto.RaftState) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 	if role != "" {
 		ns.Role = role
 	}
-	ns.Term = term
-	ns.VotedFor = votedFor
+	ns.raftState = newRaftState
 
 	//persist the data into another separate file and every write should overwrite the previous data
 }
@@ -103,8 +95,7 @@ func (ns *NodeState) Snapshot() NodeState {
 		HTTPAddr: ns.HTTPAddr,
 		TCPAddr:  ns.TCPAddr,
 		Role:     ns.Role,
-		Term:     ns.Term,
-		VotedFor: ns.VotedFor,
+		raftState: ns.raftState,
 	}
 }
 

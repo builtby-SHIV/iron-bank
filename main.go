@@ -141,7 +141,7 @@ func extractPort(addr string) (string, error) {
 
 func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag string) (*ServerConfig, error) {
 	if strings.TrimSpace(tcpFlag) == "" {
-		return nil, errors.New("--tcp is required (e.g. --tcp=:7001)")
+		return nil, errors.New("--tcp is required")
 	}
 	normTCP, tcpPort, err := normalizeAddr(tcpFlag)
 	if err != nil {
@@ -292,7 +292,7 @@ func main() {
 	}()
 
 	targets := parsePeersList(*peersFlag, snap.TCPAddr)
-	peerMap.BroadcastAnnouncement(targets, selfInfo, ctx)
+	peerMap.BroadcastAnnouncement(targets, ns, ctx)
 
 	var httpServer *http.Server
 

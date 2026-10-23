@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-type MessageType string
-
 type ClusterMessage struct {
 	Type     MessageType `json:"type"`
 	SenderID string      `json:"sender_id"`
@@ -38,8 +36,12 @@ type PeerMap struct {
 }
 
 const (
-	MsgAnnounce    MessageType = "ANNOUNCE"
-	MsgAnnounceAck MessageType = "ANNOUNCE_ACK"
+	MsgAnnounce				= "ANNOUNCE"
+	MsgAnnounceAck 			= "ANNOUNCE_ACK"
+	MsgAppendEntries		= 1
+    MsgRequestVote			= 2
+	MsgAppendEntriesReply	= 3
+	MsgRequestVoteReply		= 4
 )
 
 func NewPeerMap() *PeerMap {
@@ -164,7 +166,7 @@ func (pm *PeerMap) HandleTCPConnection(conn net.Conn, self PeerInfo) {
 	}
 }
 
-func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Duration, ctx context.Context) error {
+func (pm *PeerMap) AnnounceTo(targetTCP string, self *NodeState, timeout time.Duration, ctx context.Context) error {
 	conn, err := net.DialTimeout("tcp", targetTCP, timeout)
 	if err != nil {
 		return err
@@ -206,15 +208,15 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Dura
 			fmt.Printf("Error with the reply's senderId %v\n", err.Error())
 			return err
 		}
-		go establishTCPConnection(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second))
+		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second))
 	} else if reply.Role == RoleLeader && self.Role == RoleFollower {
-		go listenToLeader(&self)
+		go listenAndReplyToLeader(self)
 	} 
 
 	return nil
 }
 
-func (pm *PeerMap) BroadcastAnnouncement(targets []string, self PeerInfo, ctx context.Context) {
+func (pm *PeerMap) BroadcastAnnouncement(targets []string, self *NodeState, ctx context.Context) {
 	for _, target := range targets {
 		addr := strings.TrimSpace(target)
 		if addr == "" || addr == self.TCPAddr {
@@ -238,7 +240,7 @@ func (pm *PeerMap) String() string {
 	return b.String()
 }
 
-func establishTCPConnection(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration) error {
+func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration) error {
 	var dialer net.Dialer
 	var conn net.Conn
 	var err error
@@ -262,6 +264,10 @@ func establishTCPConnection(targetTCP string, send chan *AppendEntriesArgs, ctx 
 			size := uint64(len(payload))
 			header := make([]byte, 8)
 			binary.LittleEndian.PutUint64(header, size)
+
+			if _, err := conn.Write([]byte{MsgAppendEntries}); err != nil {
+				return err
+			}
 
 			if _, err := conn.Write(header); err != nil {
 				return err
@@ -303,7 +309,7 @@ func establishTCPConnection(targetTCP string, send chan *AppendEntriesArgs, ctx 
 	}
 }
 
-func listenToLeader(self *PeerInfo) {
+func listenAndReplyToLeader(self *NodeState) {
 	tcpLn, err := net.Listen("tcp", self.TCPAddr)
 	if err != nil {
 		fmt.Println("error on starting a TCP listener:", err)
@@ -316,13 +322,21 @@ func listenToLeader(self *PeerInfo) {
 		fmt.Println("error on listening for a TCP connection:", err)
 		return
 	}
+	typeBuf := make([]byte, 1)
+	_, err = io.ReadFull(conn, typeBuf)
+	if err != nil {
+		fmt.Println("Connection closed or read error:", err)
+		return
+	}
+	msgType := typeBuf[0]
+	
 	header := make([]byte, 8)
 	_, err = io.ReadFull(conn, header) 
 	if err != nil {
 		fmt.Println("Connection closed or read error:", err)
 		return
 	}
-	length := binary.BigEndian.Uint32(header)
+	length := binary.BigEndian.Uint64(header)
 
 	payload := make([]byte, length)
 	_, err = io.ReadFull(conn, payload)
@@ -330,10 +344,34 @@ func listenToLeader(self *PeerInfo) {
 		fmt.Println("Failed to read complete payload:", err)
 		return
 	}
+	
+	if msgType == MsgAppendEntries {
 
-	data := &AppendEntriesArgs{}
-	MustUnmarshal(payload, data)
+		data := &AppendEntriesArgs{}
+		MustUnmarshal(payload, data)
+		var reply *AppendEntriesReply
+		
+		if data.Term < self.Term {
+			reply = &AppendEntriesReply{
+				Term: self.Term,
+				ConflictIndex: 0,
+				ConflictTerm: 0,
+				Success: false,
+			}
+		} else if data.Term == self.Term {
+			dataReceived := MustUnmarshal(payload, reply)
+		}
 
-	_ = data
-	// if data.Term < ...
+		replyPayload := MustMarshal(reply)
+		size := uint64(len(replyPayload))
+		binary.BigEndian.AppendUint64(header, size)
+
+		if _, err := conn.Write(header); err != nil {
+			return err
+		}
+
+		if _, err := conn.Write(payload); err != nil {
+			return err
+		}
+	}
 }

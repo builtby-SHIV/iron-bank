@@ -8,31 +8,32 @@ import (
 	"io"
 	"log"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+type MessageType string
+
 type ClusterMessage struct {
 	Type     MessageType `json:"type"`
-	SenderID string      `json:"sender_id"`
+	SenderID uint64      `json:"sender_id"`
 	HTTPAddr string      `json:"http_addr"`
 	TCPAddr  string      `json:"tcp_addr"`
 	Role     string      `json:"role"`
 }
 
 type PeerInfo struct {
-	ID       string    
-	HTTPAddr string    
-	TCPAddr  string    
-	Role     string    
-	LastSeen time.Time 
+	ID       uint64    `json:"id"`
+	HTTPAddr string    `json:"http_addr"`
+	TCPAddr  string    `json:"tcp_addr"`
+	Role     string    `json:"role"`
+	LastSeen time.Time `json:"last_seen,omitempty"`
 }
 
 type PeerMap struct {
 	mu    sync.RWMutex
-	peers map[string]*PeerInfo
+	peers map[uint64]*PeerInfo
 }
 
 const (
@@ -45,7 +46,7 @@ const (
 )
 
 func NewPeerMap() *PeerMap {
-	return &PeerMap{peers: make(map[string]*PeerInfo)}
+	return &PeerMap{peers: make(map[uint64]*PeerInfo)}
 }
 
 func (pm *PeerMap) Len() int {
@@ -63,13 +64,13 @@ func (pm *PeerMap) Add(p PeerInfo) {
 	pm.peers[p.ID] = &p
 }
 
-func (pm *PeerMap) Remove(id string) {
+func (pm *PeerMap) Remove(id uint64) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	delete(pm.peers, id)
 }
 
-func (pm *PeerMap) Get(id string) (PeerInfo, bool) {
+func (pm *PeerMap) Get(id uint64) (PeerInfo, bool) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	p, ok := pm.peers[id]
@@ -112,7 +113,7 @@ func (pm *PeerMap) Leader() (PeerInfo, bool) {
 	return PeerInfo{}, false
 }
 
-func (pm *PeerMap) OtherPeers(selfID string) []PeerInfo {
+func (pm *PeerMap) OtherPeers(selfID uint64) []PeerInfo {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	var out []PeerInfo
@@ -143,7 +144,7 @@ func (pm *PeerMap) HandleTCPConnection(conn net.Conn, self PeerInfo) {
 
 	switch msg.Type {
 	case MsgAnnounce:
-		if msg.SenderID != "" && msg.SenderID != self.ID {
+		if msg.SenderID != 0 && msg.SenderID != self.ID {
 			pm.Add(PeerInfo{
 				ID:       msg.SenderID,
 				HTTPAddr: msg.HTTPAddr,
@@ -151,7 +152,7 @@ func (pm *PeerMap) HandleTCPConnection(conn net.Conn, self PeerInfo) {
 				Role:     msg.Role,
 				LastSeen: time.Now(),
 			})
-			log.Printf("[peers] registered peer %s (%s, %s)", msg.SenderID, msg.TCPAddr, msg.Role)
+			log.Printf("[peers] registered peer %d (%s, %s)", msg.SenderID, msg.TCPAddr, msg.Role)
 		}
 
 		// Reply with self identity
@@ -190,7 +191,7 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self *NodeState, timeout time.Du
 		return err
 	}
 
-	if reply.Type == MsgAnnounceAck && reply.SenderID != "" && reply.SenderID != self.ID {
+	if reply.Type == MsgAnnounceAck && reply.SenderID != 0 && reply.SenderID != self.ID {
 		pm.Add(PeerInfo{
 			ID:       reply.SenderID,
 			HTTPAddr: reply.HTTPAddr,
@@ -198,17 +199,12 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self *NodeState, timeout time.Du
 			Role:     reply.Role,
 			LastSeen: time.Now(),
 		})
-		log.Printf("[peers] announced to peer %s (%s, %s)", reply.SenderID, reply.TCPAddr, reply.Role)
+		log.Printf("[peers] announced to peer %d (%s, %s)", reply.SenderID, reply.TCPAddr, reply.Role)
 	}
 
 	if reply.Role == RoleFollower && self.Role == RoleLeader {
 		send := make(chan *AppendEntriesArgs)
-		senderId, err := strconv.Atoi(reply.SenderID)
-		if err != nil {
-			fmt.Printf("Error with the reply's senderId %v\n", err.Error())
-			return err
-		}
-		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second))
+		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1 * reply.SenderID) * (time.Second), self)
 	} else if reply.Role == RoleLeader && self.Role == RoleFollower {
 		go listenAndReplyToLeader(self)
 	} 
@@ -240,10 +236,11 @@ func (pm *PeerMap) String() string {
 	return b.String()
 }
 
-func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration) error {
+func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration, self *NodeState) error {
 	var dialer net.Dialer
 	var conn net.Conn
 	var err error
+	var PrevLogIndex, PrevLogTerm uint64
 
 	for {
 		conn, err = dialer.DialContext(ctx, "tcp", targetTCP)
@@ -259,6 +256,9 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 	for {
 		select {
 		case data := <- send:
+			PrevLogIndex = data.PrevLogIndex
+			PrevLogTerm = data.PrevLogIndex
+
 			payload := MustMarshal(data)
 
 			size := uint64(len(payload))
@@ -297,10 +297,31 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 			if !reply.Success {
 				//access previous entries and check where is it lagging behind
 			} else {
+				ticker.Reset(interval)
 				continue
 			}
 			
 		case t := <- ticker.C:
+			emptyPayload := &AppendEntriesArgs{
+				Term: self.Term,
+				LeaderID: self.ID,
+				PrevLogIndex: PrevLogIndex,
+				PrevLogTerm: PrevLogTerm,
+			}
+			payload := MustMarshal(emptyPayload)
+			size := uint64(len(payload))
+			header := make([]byte, 8)
+			binary.LittleEndian.PutUint64(header, size)
+
+			if _, err := conn.Write([]byte{MsgAppendEntries}); err != nil {
+				return err
+			}
+			if _, err := conn.Write(header); err != nil {
+				return err
+			}
+			if _, err := conn.Write(payload); err != nil {
+				return err
+			}
 			fmt.Printf("Executed at: %s\n", t.Format("15:04:05"))
 		case <- ctx.Done():
 			fmt.Println("[Goroutine] Context cancelled cleaning up and exiting...")
@@ -346,7 +367,6 @@ func listenAndReplyToLeader(self *NodeState) {
 	}
 	
 	if msgType == MsgAppendEntries {
-
 		data := &AppendEntriesArgs{}
 		MustUnmarshal(payload, data)
 		var reply *AppendEntriesReply
@@ -358,8 +378,15 @@ func listenAndReplyToLeader(self *NodeState) {
 				ConflictTerm: 0,
 				Success: false,
 			}
+			
 		} else if data.Term == self.Term {
-			dataReceived := MustUnmarshal(payload, reply)
+			// check what is to be done of the entries and act accordingly
+			reply = &AppendEntriesReply{
+				Term: self.Term,
+				ConflictIndex: 0,
+				ConflictTerm: 0,
+				Success: true,
+			}
 		}
 
 		replyPayload := MustMarshal(reply)
@@ -367,11 +394,11 @@ func listenAndReplyToLeader(self *NodeState) {
 		binary.BigEndian.AppendUint64(header, size)
 
 		if _, err := conn.Write(header); err != nil {
-			return err
+			return
 		}
 
 		if _, err := conn.Write(payload); err != nil {
-			return err
+			return
 		}
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,11 +38,12 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	NodeID   string
+	NodeID   uint64
 	HTTPAddr string 
 	TCPAddr  string 
 	DataDir  string
 	Role     string
+	Peers    string
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -139,43 +139,50 @@ func extractPort(addr string) (string, error) {
 	return port, err
 }
 
-func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag string) (*ServerConfig, error) {
+func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag string) (*ServerConfig, error) {
+	if strings.TrimSpace(idFlag) == "" {
+		return nil, errors.New("--id is required")
+	}
+	nodeID, err := strconv.ParseUint(strings.TrimSpace(idFlag), 10, 64)
+	if err != nil || nodeID == 0 {
+		return nil, fmt.Errorf("invalid --id=%q: must be a positive integer", idFlag)
+	}
+
+	if strings.TrimSpace(httpFlag) == "" {
+		return nil, errors.New("--http is required")
+	}
+	normHTTP, _, err := normalizeAddr(httpFlag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --http=%q: %w", httpFlag, err)
+	}
+
 	if strings.TrimSpace(tcpFlag) == "" {
 		return nil, errors.New("--tcp is required")
 	}
-	normTCP, tcpPort, err := normalizeAddr(tcpFlag)
+	normTCP, _, err := normalizeAddr(tcpFlag)
 	if err != nil {
 		return nil, fmt.Errorf("invalid --tcp=%q: %w", tcpFlag, err)
 	}
 
-	var normHTTP, httpPort string
-	if h := strings.TrimSpace(httpFlag); h != "" {
-		normHTTP, httpPort, err = normalizeAddr(h)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --http=%q: %w", h, err)
-		}
+	if strings.TrimSpace(roleFlag) == "" {
+		return nil, errors.New("--role is required")
 	}
-
-	nodeID := strings.TrimSpace(idFlag)
-	if nodeID == "" {
-		if httpPort != "" {
-			nodeID = httpPort
-		} else {
-			nodeID = tcpPort
-		}
+	role, err := ParseRole(roleFlag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --role=%q: %w", roleFlag, err)
+	}
+	if role == RoleUnknown {
+		return nil, fmt.Errorf("invalid --role=%q: must be one of leader, follower, observer", roleFlag)
 	}
 
 	dataDir := strings.TrimSpace(dataDirFlag)
 	if dataDir == "" {
-		dataDir = filepath.Join("data", nodeID)
+		return nil, errors.New("--data is required")
 	}
 
-	role := RoleUnknown
-	if r := strings.TrimSpace(roleFlag); r != "" {
-		role, err = ParseRole(r)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --role=%q: %w", r, err)
-		}
+	peers := strings.TrimSpace(peersFlag)
+	if peers == "" {
+		return nil, errors.New("--peers is required")
 	}
 
 	return &ServerConfig{
@@ -184,12 +191,12 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag string) (*Se
 		TCPAddr:  normTCP,
 		DataDir:  dataDir,
 		Role:     role,
+		Peers:    peers,
 	}, nil
 }
 
 
 // parsePeersList returns a list of target peer TCP addresses, excluding selfTCP.
-// If raw is empty, it defaults to the standard cluster ports (:7001, :7002, :7003).
 func parsePeersList(raw string, selfTCP string) []string {
 	var candidates []string
 	if strings.TrimSpace(raw) != "" {
@@ -204,8 +211,6 @@ func parsePeersList(raw string, selfTCP string) []string {
 				}
 			}
 		}
-	} else {
-		candidates = []string{":7001", ":7002", ":7003"}
 	}
 
 	normSelf, _, _ := normalizeAddr(selfTCP)
@@ -219,15 +224,15 @@ func parsePeersList(raw string, selfTCP string) []string {
 }
 
 func main() {
-	idFlag      := flag.String("id",    "", "Node identifier")
-	httpFlag    := flag.String("http",  "", "HTTP listen address (optional)")
+	idFlag      := flag.String("id",    "", "Node identifier (required, uint64)")
+	httpFlag    := flag.String("http",  "", "HTTP listen address (required)")
 	tcpFlag     := flag.String("tcp",   "", "TCP listen address (required)")
-	roleFlag    := flag.String("role",  "", "Node role: leader | follower | observer")
-	dataDirFlag := flag.String("data",  "", "Storage directory")
-	peersFlag   := flag.String("peers", "", "List of peer TCP addresses")
+	roleFlag    := flag.String("role",  "", "Node role: leader | follower | observer (required)")
+	dataDirFlag := flag.String("data",  "", "Storage directory (required)")
+	peersFlag   := flag.String("peers", "", "List of peer TCP addresses (required)")
 	flag.Parse()
 
-	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag)
+	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag, *peersFlag)
 	if err != nil {
 		log.Fatalf("[startup] %v", err)
 	}
@@ -244,7 +249,7 @@ func main() {
 	}
 
 	snap := ns.Snapshot()
-	log.Printf("[node] id=%s  role=%s  http=%s  tcp=%s  data=%s",
+	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  data=%s",
 		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, cfg.DataDir)
 
 	lsm, err := Open(cfg.DataDir, 4096, true)

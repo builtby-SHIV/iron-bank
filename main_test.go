@@ -56,12 +56,12 @@ func TestExtractPort(t *testing.T) {
 
 func TestResolveConfig(t *testing.T) {
 	t.Run("all flags provided", func(t *testing.T) {
-		cfg, err := resolveConfig("1", ":8001", ":7001", "leader", "")
+		cfg, err := resolveConfig("1", ":8001", ":7001", "leader", filepath.Join("data", "1"), ":7002,:7003")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.NodeID != "1" {
-			t.Errorf("NodeID: got %q, want 1", cfg.NodeID)
+		if cfg.NodeID != 1 {
+			t.Errorf("NodeID: got %d, want 1", cfg.NodeID)
 		}
 		if cfg.HTTPAddr != ":8001" {
 			t.Errorf("HTTPAddr: got %q, want :8001", cfg.HTTPAddr)
@@ -75,77 +75,78 @@ func TestResolveConfig(t *testing.T) {
 		if cfg.DataDir != filepath.Join("data", "1") {
 			t.Errorf("DataDir: got %q, want %q", cfg.DataDir, filepath.Join("data", "1"))
 		}
-	})
-
-	t.Run("http optional — omitted", func(t *testing.T) {
-		cfg, err := resolveConfig("2", "", ":7002", "follower", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.HTTPAddr != "" {
-			t.Errorf("HTTPAddr should be empty, got %q", cfg.HTTPAddr)
-		}
-		if cfg.Role != RoleFollower {
-			t.Errorf("Role: got %q, want follower", cfg.Role)
+		if cfg.Peers != ":7002,:7003" {
+			t.Errorf("Peers: got %q, want :7002,:7003", cfg.Peers)
 		}
 	})
 
-	t.Run("id defaults to tcp port when http omitted", func(t *testing.T) {
-		cfg, err := resolveConfig("", "", ":7003", "", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.NodeID != "7003" {
-			t.Errorf("NodeID: got %q, want 7003", cfg.NodeID)
+	t.Run("id missing returns error", func(t *testing.T) {
+		_, err := resolveConfig("", ":8001", ":7001", "leader", "./data", ":7002")
+		if err == nil || !strings.Contains(err.Error(), "--id") {
+			t.Fatalf("expected error mentioning --id, got %v", err)
 		}
 	})
 
-	t.Run("id defaults to http port when http provided", func(t *testing.T) {
-		cfg, err := resolveConfig("", ":8004", ":7004", "", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.NodeID != "8004" {
-			t.Errorf("NodeID: got %q, want 8004", cfg.NodeID)
+	t.Run("id invalid format or zero returns error", func(t *testing.T) {
+		for _, bad := range []string{"abc", "0", "-1"} {
+			_, err := resolveConfig(bad, ":8001", ":7001", "leader", "./data", ":7002")
+			if err == nil {
+				t.Fatalf("expected error for --id=%q", bad)
+			}
 		}
 	})
 
-	t.Run("explicit data dir overrides default", func(t *testing.T) {
-		cfg, err := resolveConfig("1", "", ":7001", "", "./custom")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.DataDir != "./custom" {
-			t.Errorf("DataDir: got %q, want ./custom", cfg.DataDir)
+	t.Run("http missing returns error", func(t *testing.T) {
+		_, err := resolveConfig("1", "", ":7001", "leader", "./data", ":7002")
+		if err == nil || !strings.Contains(err.Error(), "--http") {
+			t.Fatalf("expected error mentioning --http, got %v", err)
 		}
 	})
 
 	t.Run("tcp missing returns error", func(t *testing.T) {
-		_, err := resolveConfig("1", ":8001", "", "leader", "")
-		if err == nil {
-			t.Fatal("expected error when --tcp omitted")
+		_, err := resolveConfig("1", ":8001", "", "leader", "./data", ":7002")
+		if err == nil || !strings.Contains(err.Error(), "--tcp") {
+			t.Fatalf("expected error mentioning --tcp, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "--tcp") {
-			t.Errorf("error should mention --tcp, got: %v", err)
+	})
+
+	t.Run("role missing returns error", func(t *testing.T) {
+		_, err := resolveConfig("1", ":8001", ":7001", "", "./data", ":7002")
+		if err == nil || !strings.Contains(err.Error(), "--role") {
+			t.Fatalf("expected error mentioning --role, got %v", err)
+		}
+	})
+
+	t.Run("data missing returns error", func(t *testing.T) {
+		_, err := resolveConfig("1", ":8001", ":7001", "leader", "", ":7002")
+		if err == nil || !strings.Contains(err.Error(), "--data") {
+			t.Fatalf("expected error mentioning --data, got %v", err)
+		}
+	})
+
+	t.Run("peers missing returns error", func(t *testing.T) {
+		_, err := resolveConfig("1", ":8001", ":7001", "leader", "./data", "")
+		if err == nil || !strings.Contains(err.Error(), "--peers") {
+			t.Fatalf("expected error mentioning --peers, got %v", err)
 		}
 	})
 
 	t.Run("invalid role returns error", func(t *testing.T) {
-		_, err := resolveConfig("1", ":8001", ":7001", "emperor", "")
+		_, err := resolveConfig("1", ":8001", ":7001", "emperor", "./data", ":7002")
 		if err == nil {
 			t.Fatal("expected error for unknown role")
 		}
 	})
 
 	t.Run("invalid tcp returns error", func(t *testing.T) {
-		_, err := resolveConfig("1", "", "not-a-port", "", "")
+		_, err := resolveConfig("1", ":8001", "not-a-port", "leader", "./data", ":7002")
 		if err == nil {
 			t.Fatal("expected error for invalid tcp")
 		}
 	})
 
 	t.Run("invalid http returns error", func(t *testing.T) {
-		_, err := resolveConfig("1", "not-a-port", ":7001", "", "")
+		_, err := resolveConfig("1", "not-a-port", ":7001", "leader", "./data", ":7002")
 		if err == nil {
 			t.Fatal("expected error for invalid http")
 		}
@@ -155,9 +156,9 @@ func TestResolveConfig(t *testing.T) {
 // ── NodeState ─────────────────────────────────────────────────────────────────
 
 func TestNodeStateModifyNodeState(t *testing.T) {
-	ns := NewNodeState("1", ":8001", ":7001", RoleFollower, 0, -1)
+	ns := NewNodeState(1, ":8001", ":7001", RoleFollower, 0, -1)
 	snap := ns.Snapshot()
-	if snap.ID != "1" || snap.Role != RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
+	if snap.ID != 1 || snap.Role != RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
 		t.Fatalf("unexpected initial snapshot: %+v", snap)
 	}
 
@@ -170,20 +171,20 @@ func TestNodeStateModifyNodeState(t *testing.T) {
 
 func TestNodeStateMergeFlags(t *testing.T) {
 	ns := &NodeState{}
-	ns.MergeFlags("1", ":8001", ":7001", RoleFollower)
-	ns.MergeFlags("", "", "", RoleLeader)
+	ns.MergeFlags(1, ":8001", ":7001", RoleFollower)
+	ns.MergeFlags(0, "", "", RoleLeader)
 	snap := ns.Snapshot()
 
 	if snap.Role != RoleLeader {
 		t.Errorf("expected role=%q, got %q", RoleLeader, snap.Role)
 	}
-	if snap.ID != "1" || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" {
+	if snap.ID != 1 || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" {
 		t.Errorf("fields should be preserved: %+v", snap)
 	}
 }
 
 func TestNodeStateUpdateRole(t *testing.T) {
-	ns := &NodeState{ID: "1", Role: RoleFollower}
+	ns := &NodeState{ID: 1, Role: RoleFollower}
 	if err := ns.UpdateRole(RoleLeader); err != nil {
 		t.Fatal(err)
 	}
@@ -201,8 +202,8 @@ func TestPeerMapOperations(t *testing.T) {
 		t.Fatal("expected empty map")
 	}
 
-	p1 := PeerInfo{ID: "1", HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleLeader}
-	p2 := PeerInfo{ID: "2", HTTPAddr: ":8002", TCPAddr: ":7002", Role: RoleFollower}
+	p1 := PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleLeader}
+	p2 := PeerInfo{ID: 2, HTTPAddr: ":8002", TCPAddr: ":7002", Role: RoleFollower}
 
 	pm.Add(p1)
 	pm.Add(p2)
@@ -211,23 +212,23 @@ func TestPeerMapOperations(t *testing.T) {
 		t.Fatalf("expected 2 peers, got %d", pm.Len())
 	}
 
-	got, ok := pm.Get("1")
+	got, ok := pm.Get(1)
 	if !ok || got.Role != RoleLeader {
 		t.Errorf("Get(1): %+v ok=%v", got, ok)
 	}
 
 	// Re-add should overwrite.
-	pm.Add(PeerInfo{ID: "1", HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleFollower})
-	got, _ = pm.Get("1")
+	pm.Add(PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleFollower})
+	got, _ = pm.Get(1)
 	if got.Role != RoleFollower {
 		t.Errorf("Add should overwrite: want follower, got %q", got.Role)
 	}
 
-	pm.Remove("2")
+	pm.Remove(2)
 	if pm.Len() != 1 {
 		t.Fatalf("expected 1 peer after Remove, got %d", pm.Len())
 	}
-	if _, ok := pm.Get("2"); ok {
+	if _, ok := pm.Get(2); ok {
 		t.Error("peer 2 should have been removed")
 	}
 }
@@ -235,8 +236,8 @@ func TestPeerMapOperations(t *testing.T) {
 func TestPeerMapLeaderAndFollowerHelpers(t *testing.T) {
 	// From node 1's perspective: peers are 2 and 3
 	pmLeader := NewPeerMap()
-	pmLeader.Add(PeerInfo{ID: "2", TCPAddr: ":7002", Role: RoleFollower})
-	pmLeader.Add(PeerInfo{ID: "3", TCPAddr: ":7003", Role: RoleFollower})
+	pmLeader.Add(PeerInfo{ID: 2, TCPAddr: ":7002", Role: RoleFollower})
+	pmLeader.Add(PeerInfo{ID: 3, TCPAddr: ":7003", Role: RoleFollower})
 
 	// Leader helper: leader wants all followers to send messages to
 	followers := pmLeader.Followers()
@@ -251,22 +252,22 @@ func TestPeerMapLeaderAndFollowerHelpers(t *testing.T) {
 
 	// From node 2's perspective (follower): peers are 1 (leader) and 3 (follower)
 	pmFollower := NewPeerMap()
-	pmFollower.Add(PeerInfo{ID: "1", TCPAddr: ":7001", Role: RoleLeader})
-	pmFollower.Add(PeerInfo{ID: "3", TCPAddr: ":7003", Role: RoleFollower})
+	pmFollower.Add(PeerInfo{ID: 1, TCPAddr: ":7001", Role: RoleLeader})
+	pmFollower.Add(PeerInfo{ID: 3, TCPAddr: ":7003", Role: RoleFollower})
 
 	// Follower helper: check who the leader is
 	leader, found := pmFollower.Leader()
-	if !found || leader.ID != "1" {
+	if !found || leader.ID != 1 {
 		t.Fatalf("expected leader with ID 1, got %+v (found=%v)", leader, found)
 	}
 
 	// Follower helper: start election - get other peers to send vote requests to
-	others := pmFollower.OtherPeers("2")
+	others := pmFollower.OtherPeers(2)
 	if len(others) != 2 {
 		t.Fatalf("expected 2 other peers for node 2, got %d", len(others))
 	}
 	for _, o := range others {
-		if o.ID == "2" {
+		if o.ID == 2 {
 			t.Errorf("other peers should not include self (ID 2)")
 		}
 	}
@@ -290,10 +291,10 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	addr2 := ln2.Addr().String()
 
 	pm1 := NewPeerMap()
-	self1 := PeerInfo{ID: "1", HTTPAddr: ":8001", TCPAddr: addr1, Role: RoleLeader}
+	self1 := PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: addr1, Role: RoleLeader}
 
 	pm2 := NewPeerMap()
-	self2 := PeerInfo{ID: "2", HTTPAddr: ":8002", TCPAddr: addr2, Role: RoleFollower}
+	self2 := &NodeState{ID: 2, HTTPAddr: ":8002", TCPAddr: addr2, Role: RoleFollower}
 
 	// Run accept loops for both nodes
 	go func() {
@@ -312,7 +313,12 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go pm2.HandleTCPConnection(conn, self2)
+			go pm2.HandleTCPConnection(conn, PeerInfo{
+				ID:       self2.ID,
+				HTTPAddr: self2.HTTPAddr,
+				TCPAddr:  self2.TCPAddr,
+				Role:     self2.Role,
+			})
 		}
 	}()
 
@@ -323,7 +329,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 
 	// Verify node 1 received node 2's announcement
 	time.Sleep(50 * time.Millisecond)
-	p2, ok := pm1.Get("2")
+	p2, ok := pm1.Get(2)
 	if !ok {
 		t.Fatal("node 1 did not register node 2 in peer map")
 	}
@@ -332,7 +338,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	}
 
 	// Verify node 2 received node 1's ack and added node 1
-	p1, ok := pm2.Get("1")
+	p1, ok := pm2.Get(1)
 	if !ok {
 		t.Fatal("node 2 did not register node 1 from ack")
 	}
@@ -342,7 +348,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 
 	// Verify followers list on leader
 	followers := pm1.Followers()
-	if len(followers) != 1 || followers[0].ID != "2" {
+	if len(followers) != 1 || followers[0].ID != 2 {
 		t.Errorf("pm1 Followers mismatch: %+v", followers)
 	}
 }
@@ -428,7 +434,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	base := t.TempDir()
 
 	ns := &NodeState{
-		ID:       "1",
+		ID:       1,
 		HTTPAddr: ":28001",
 		TCPAddr:  ":27001",
 		Role:     RoleLeader,
@@ -441,7 +447,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	defer lsm.Close()
 
 	pm := NewPeerMap()
-	pm.Add(PeerInfo{ID: "2", TCPAddr: ":27002", Role: RoleFollower})
+	pm.Add(PeerInfo{ID: 2, TCPAddr: ":27002", Role: RoleFollower})
 
 	srv := &Server{lsm: lsm}
 	mux := http.NewServeMux()
@@ -488,7 +494,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	}
 	var status map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&status)
-	if status["id"] != "1" {
+	if fmt.Sprintf("%v", status["id"]) != "1" {
 		t.Errorf("/status id: got %v", status["id"])
 	}
 	if status["role"] != string(RoleLeader) {
@@ -503,7 +509,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	defer resp2.Body.Close()
 	var peers []PeerInfo
 	_ = json.NewDecoder(resp2.Body).Decode(&peers)
-	if len(peers) != 1 || peers[0].ID != "2" {
+	if len(peers) != 1 || peers[0].ID != 2 {
 		t.Errorf("/peers: got %+v", peers)
 	}
 

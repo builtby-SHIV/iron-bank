@@ -29,7 +29,7 @@ func ParseRole(s string) (string, error) {
 }
 
 type NodeState struct {
-	ID       string
+	ID       uint64
 	HTTPAddr string
 	TCPAddr  string
 	Role     string
@@ -38,7 +38,7 @@ type NodeState struct {
 	mu       sync.RWMutex
 }
 
-func NewNodeState(id, httpAddr, tcpAddr, role string, term uint64, votedFor int64) *NodeState {
+func NewNodeState(id uint64, httpAddr, tcpAddr, role string, term uint64, votedFor int64) *NodeState {
 	return &NodeState{
 		ID:       id,
 		HTTPAddr: httpAddr,
@@ -49,10 +49,10 @@ func NewNodeState(id, httpAddr, tcpAddr, role string, term uint64, votedFor int6
 	}
 }
 
-func (ns *NodeState) MergeFlags(id, httpAddr, tcpAddr string, role string) {
+func (ns *NodeState) MergeFlags(id uint64, httpAddr, tcpAddr string, role string) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
-	if id != "" {
+	if id != 0 {
 		ns.ID = id
 	}
 	if httpAddr != "" {

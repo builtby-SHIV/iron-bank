@@ -35,12 +35,12 @@ func ParseRole(s string) (string, error) {
 }
 
 type NodeState struct {
-	ID        string       `json:"id"`
-	HTTPAddr  string       `json:"http_addr"`
-	TCPAddr   string       `json:"tcp_addr"`
-	Role      string       `json:"role"`
-	statePath string       `json:"-"`
-	mu        sync.RWMutex `json:"-"`
+	ID        string       
+	HTTPAddr  string       
+	TCPAddr   string       
+	Role      string       
+	statePath string       
+	mu        sync.RWMutex 
 }
 
 func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
@@ -103,10 +103,10 @@ func (ns *NodeState) Snapshot() NodeState {
 func (ns *NodeState) Save() error {
 	ns.mu.RLock()
 	payload := struct {
-		ID       string   `json:"id"`
-		HTTPAddr string   `json:"http_addr"`
-		TCPAddr  string   `json:"tcp_addr"`
-		Role     string   `json:"role"`
+		ID       string   
+		HTTPAddr string   
+		TCPAddr  string   
+		Role     string   
 	}{ID: ns.ID, HTTPAddr: ns.HTTPAddr, TCPAddr: ns.TCPAddr, Role: ns.Role}
 	ns.mu.RUnlock()
 

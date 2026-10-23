@@ -18,7 +18,6 @@ import (
 	"time"
 )
 
-
 type Response struct {
 	Message string `json:"message"`
 }
@@ -32,28 +31,11 @@ type NonAddRequest struct {
 	Key string `json:"key"`
 }
 
-type AppendEntriesArgs struct {
-    Term         uint64
-    LeaderID     uint64
-    PrevLogIndex uint64     // entry just before the new ones
-    PrevLogTerm  uint64
-    Entries      [] LogEntry // empty for a pure heartbeat
-    LeaderCommit uint64     // leader's commitIndex
-}
-
-type AppendEntriesReply struct {
-    Term    uint64
-    Success bool
-    // optional, speeds up repair after a mismatch
-    ConflictIndex uint64
-    ConflictTerm  uint64
-}
-
 type Server struct {
 	lsm          *LSMTree
 	cfg          *ServerConfig
 	term 		 uint64
-	votedFor     uint64
+	votedFor     int64
 	prevLogIndex uint64
 }
 
@@ -289,6 +271,9 @@ func main() {
 		Role:     snap.Role,
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// ── TCP Accept Loop: receive incoming peer connections & announcements ──
 	go func() {
 		for {
@@ -301,7 +286,7 @@ func main() {
 	}()
 
 	targets := parsePeersList(*peersFlag, snap.TCPAddr)
-	peerMap.BroadcastAnnouncement(targets, selfInfo)
+	peerMap.BroadcastAnnouncement(targets, selfInfo, ctx)
 
 	var httpServer *http.Server
 
@@ -350,9 +335,6 @@ func main() {
 		}()
 		log.Printf("[http] listening on %s", snap.HTTPAddr)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	<- ctx.Done()
 

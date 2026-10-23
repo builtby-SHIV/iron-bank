@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,7 +158,7 @@ func (pm *PeerMap) HandleTCPConnection(conn net.Conn, self PeerInfo) {
 	}
 }
 
-func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Duration) error {
+func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Duration, ctx context.Context) error {
 	conn, err := net.DialTimeout("tcp", targetTCP, timeout)
 	if err != nil {
 		return err
@@ -189,17 +192,21 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self PeerInfo, timeout time.Dura
 		})
 		log.Printf("[peers] announced to peer %s (%s, %s)", reply.SenderID, reply.TCPAddr, reply.Role)
 	}
+
+	send := make(chan *AppendEntriesArgs)
+	senderId, err := strconv.Atoi(reply.SenderID)
+	go establishTCPConnection(targetTCP, send, ctx, time.Duration(1 * senderId ) * (time.Second) )
 	return nil
 }
 
-func (pm *PeerMap) BroadcastAnnouncement(targets []string, self PeerInfo) {
+func (pm *PeerMap) BroadcastAnnouncement(targets []string, self PeerInfo, ctx context.Context) {
 	for _, target := range targets {
 		addr := strings.TrimSpace(target)
 		if addr == "" || addr == self.TCPAddr {
 			continue
 		}
 		go func(targetAddr string) {
-			_ = pm.AnnounceTo(targetAddr, self, 2*time.Second)
+			_ = pm.AnnounceTo(targetAddr, self, 2*time.Second, ctx)
 		}(addr)
 	}
 }
@@ -214,4 +221,66 @@ func (pm *PeerMap) String() string {
 		fmt.Fprintf(&b, "  %s\n", data)
 	}
 	return b.String()
+}
+
+func establishTCPConnection(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration) error {
+	var dialer net.Dialer
+	var conn net.Conn
+	var err error
+
+	for {
+		conn, err = dialer.DialContext(ctx, "tcp", targetTCP)
+		if err == nil {
+			break
+		}
+	}
+	defer conn.Close()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case data := <- send:
+			payload := MustMarshal(data)
+
+			size := uint64(len(payload))
+			header := make([]byte, 8)
+			binary.LittleEndian.PutUint64(header, size)
+
+			if _, err := conn.Write(header); err != nil {
+				return err
+			}
+
+			if _, err := conn.Write(payload); err != nil {
+				return err
+			}
+
+			_, err := io.ReadFull(conn, header) 
+			if err != nil {
+				fmt.Println("Connection closed or read error:", err)
+				return err
+			}
+			length := binary.BigEndian.Uint32(header)
+
+			read := make([]byte, length)
+			_, err = io.ReadFull(conn, read)
+			if err != nil {
+				fmt.Println("Failed to read complete payload:", err)
+				return err
+			}
+
+			reply := &AppendEntriesReply{}
+			MustUnmarshal(payload, reply)
+
+			if !reply.Success {
+				//access previous entries and check where is it lagging behind
+			} else {
+				continue
+			}
+			
+		case t := <- ticker.C:
+			fmt.Printf("Executed at: %s\n", t.Format("15:04:05"))
+		}
+	}
 }

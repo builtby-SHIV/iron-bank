@@ -623,7 +623,7 @@ func (l *LSMTree) recoverFromWAL() error {
 	return nil
 }
 
-func (l *LSMTree) readEntriesFromWAL() ([]*WAL_Entry, error) {
+func (l *LSMTree) readEntriesFromWAL() ([]*LogEntry, error) {
 	entries, err := l.wal.ReadAll()
 	if err != nil {
 		repairedEntries, repErr := l.wal.Repair()
@@ -635,7 +635,7 @@ func (l *LSMTree) readEntriesFromWAL() ([]*WAL_Entry, error) {
 	return entries, nil
 }
 
-func (l *LSMTree) processWALEntry(entry *WAL_Entry) error {
+func (l *LSMTree) processWALEntry(entry *LogEntry) error {
 	switch entry.Command {
 	case Command_PUT:
 		return l.PUT(entry.Key, entry.Value)

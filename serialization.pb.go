@@ -290,7 +290,7 @@ type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
 	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
-	VotedFor      uint64                 `protobuf:"varint,3,opt,name=VotedFor,proto3" json:"VotedFor,omitempty"`
+	VotedFor      int64                  `protobuf:"varint,3,opt,name=VotedFor,proto3" json:"VotedFor,omitempty"`
 	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
 	Value         []byte                 `protobuf:"bytes,5,opt,name=value,proto3,oneof" json:"value,omitempty"`
 	CRC           uint32                 `protobuf:"varint,6,opt,name=CRC,proto3" json:"CRC,omitempty"`
@@ -343,7 +343,7 @@ func (x *LogEntry) GetTerm() uint64 {
 	return 0
 }
 
-func (x *LogEntry) GetVotedFor() uint64 {
+func (x *LogEntry) GetVotedFor() int64 {
 	if x != nil {
 		return x.VotedFor
 	}
@@ -378,6 +378,158 @@ func (x *LogEntry) GetCommand() Command {
 	return Command_PUT
 }
 
+type AppendEntriesArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
+	LeaderID      uint64                 `protobuf:"varint,2,opt,name=LeaderID,proto3" json:"LeaderID,omitempty"`
+	PrevLogIndex  uint64                 `protobuf:"varint,3,opt,name=PrevLogIndex,proto3" json:"PrevLogIndex,omitempty"`
+	PrevLogTerm   uint64                 `protobuf:"varint,4,opt,name=PrevLogTerm,proto3" json:"PrevLogTerm,omitempty"`
+	LeaderCommit  uint64                 `protobuf:"varint,5,opt,name=LeaderCommit,proto3" json:"LeaderCommit,omitempty"`
+	Entries       []*LogEntry            `protobuf:"bytes,6,rep,name=Entries,proto3" json:"Entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppendEntriesArgs) Reset() {
+	*x = AppendEntriesArgs{}
+	mi := &file_serialization_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppendEntriesArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppendEntriesArgs) ProtoMessage() {}
+
+func (x *AppendEntriesArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_serialization_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppendEntriesArgs.ProtoReflect.Descriptor instead.
+func (*AppendEntriesArgs) Descriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AppendEntriesArgs) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *AppendEntriesArgs) GetLeaderID() uint64 {
+	if x != nil {
+		return x.LeaderID
+	}
+	return 0
+}
+
+func (x *AppendEntriesArgs) GetPrevLogIndex() uint64 {
+	if x != nil {
+		return x.PrevLogIndex
+	}
+	return 0
+}
+
+func (x *AppendEntriesArgs) GetPrevLogTerm() uint64 {
+	if x != nil {
+		return x.PrevLogTerm
+	}
+	return 0
+}
+
+func (x *AppendEntriesArgs) GetLeaderCommit() uint64 {
+	if x != nil {
+		return x.LeaderCommit
+	}
+	return 0
+}
+
+func (x *AppendEntriesArgs) GetEntries() []*LogEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type AppendEntriesReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
+	ConflictIndex uint64                 `protobuf:"varint,2,opt,name=ConflictIndex,proto3" json:"ConflictIndex,omitempty"`
+	ConflictTerm  uint64                 `protobuf:"varint,3,opt,name=ConflictTerm,proto3" json:"ConflictTerm,omitempty"`
+	Success       bool                   `protobuf:"varint,4,opt,name=Success,proto3" json:"Success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppendEntriesReply) Reset() {
+	*x = AppendEntriesReply{}
+	mi := &file_serialization_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppendEntriesReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppendEntriesReply) ProtoMessage() {}
+
+func (x *AppendEntriesReply) ProtoReflect() protoreflect.Message {
+	mi := &file_serialization_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppendEntriesReply.ProtoReflect.Descriptor instead.
+func (*AppendEntriesReply) Descriptor() ([]byte, []int) {
+	return file_serialization_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AppendEntriesReply) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *AppendEntriesReply) GetConflictIndex() uint64 {
+	if x != nil {
+		return x.ConflictIndex
+	}
+	return 0
+}
+
+func (x *AppendEntriesReply) GetConflictTerm() uint64 {
+	if x != nil {
+		return x.ConflictTerm
+	}
+	return 0
+}
+
+func (x *AppendEntriesReply) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
 var File_serialization_proto protoreflect.FileDescriptor
 
 const file_serialization_proto_rawDesc = "" +
@@ -401,12 +553,24 @@ const file_serialization_proto_rawDesc = "" +
 	"\bLogEntry\x12\x14\n" +
 	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x12\n" +
 	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x1a\n" +
-	"\bVotedFor\x18\x03 \x01(\x04R\bVotedFor\x12\x10\n" +
+	"\bVotedFor\x18\x03 \x01(\x03R\bVotedFor\x12\x10\n" +
 	"\x03key\x18\x04 \x01(\tR\x03key\x12\x19\n" +
 	"\x05value\x18\x05 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
 	"\x03CRC\x18\x06 \x01(\rR\x03CRC\x12\"\n" +
 	"\acommand\x18\a \x01(\x0e2\b.CommandR\acommandB\b\n" +
-	"\x06_value*-\n" +
+	"\x06_value\"\xd2\x01\n" +
+	"\x11AppendEntriesArgs\x12\x12\n" +
+	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x1a\n" +
+	"\bLeaderID\x18\x02 \x01(\x04R\bLeaderID\x12\"\n" +
+	"\fPrevLogIndex\x18\x03 \x01(\x04R\fPrevLogIndex\x12 \n" +
+	"\vPrevLogTerm\x18\x04 \x01(\x04R\vPrevLogTerm\x12\"\n" +
+	"\fLeaderCommit\x18\x05 \x01(\x04R\fLeaderCommit\x12#\n" +
+	"\aEntries\x18\x06 \x03(\v2\t.LogEntryR\aEntries\"\x8c\x01\n" +
+	"\x12AppendEntriesReply\x12\x12\n" +
+	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12$\n" +
+	"\rConflictIndex\x18\x02 \x01(\x04R\rConflictIndex\x12\"\n" +
+	"\fConflictTerm\x18\x03 \x01(\x04R\fConflictTerm\x12\x18\n" +
+	"\aSuccess\x18\x04 \x01(\bR\aSuccess*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
@@ -426,24 +590,27 @@ func file_serialization_proto_rawDescGZIP() []byte {
 }
 
 var file_serialization_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_serialization_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_serialization_proto_goTypes = []any{
-	(Command)(0),        // 0: Command
-	(*BloomFilter)(nil), // 1: BloomFilter
-	(*IndexEntry)(nil),  // 2: IndexEntry
-	(*Index)(nil),       // 3: Index
-	(*LSMEntry)(nil),    // 4: LSMEntry
-	(*LogEntry)(nil),    // 5: LogEntry
+	(Command)(0),               // 0: Command
+	(*BloomFilter)(nil),        // 1: BloomFilter
+	(*IndexEntry)(nil),         // 2: IndexEntry
+	(*Index)(nil),              // 3: Index
+	(*LSMEntry)(nil),           // 4: LSMEntry
+	(*LogEntry)(nil),           // 5: LogEntry
+	(*AppendEntriesArgs)(nil),  // 6: AppendEntriesArgs
+	(*AppendEntriesReply)(nil), // 7: AppendEntriesReply
 }
 var file_serialization_proto_depIdxs = []int32{
 	2, // 0: Index.entries:type_name -> IndexEntry
 	0, // 1: LSMEntry.command:type_name -> Command
 	0, // 2: LogEntry.command:type_name -> Command
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	5, // 3: AppendEntriesArgs.Entries:type_name -> LogEntry
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_serialization_proto_init() }
@@ -459,7 +626,7 @@ func file_serialization_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_serialization_proto_rawDesc), len(file_serialization_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -33,6 +33,8 @@ type WAL struct {
 	maxFileSize         int64
 	maxSegments         int64
 	currentSegmentIndex int64
+	VotedFor			int64
+	term				uint64
 	ctx                 context.Context
 	cancel              context.CancelFunc
 }
@@ -97,6 +99,8 @@ func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments 
 		maxFileSize:         maxFileSize,
 		maxSegments:         maxSegments,
 		currentSegmentIndex: lastSegmentID,
+		VotedFor: 			 -1,
+		term:				 1,
 		ctx:                 ctx,
 		cancel:              cancel,
 	}

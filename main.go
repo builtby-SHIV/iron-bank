@@ -272,7 +272,7 @@ func main() {
 		//handle this later on
 	}
 	if entry != nil {
-		ns.ModifyNodeState(entry.Term, entry.VotedFor)
+		ns.Modify(entry.Term, entry.VotedFor)
 		snap = ns.Snapshot()
 	}
 

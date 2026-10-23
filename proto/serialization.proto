@@ -31,8 +31,6 @@ enum Command {
 
 message LogEntry {
     uint64 Index = 1;
-    uint64 Term = 2;
-    int64 VotedFor = 3;
     string key = 4;
     optional bytes value = 5;
     uint32  CRC = 6;

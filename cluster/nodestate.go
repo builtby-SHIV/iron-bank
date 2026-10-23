@@ -69,12 +69,12 @@ func (ns *NodeState) MergeFlags(id uint64, httpAddr, tcpAddr string, role string
 	}
 }
 
-func (ns *NodeState) ModifyNodeState(term uint64, votedFor int64) {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-	ns.Term = term
-	ns.VotedFor = votedFor
-}
+// func (ns *NodeState) ModifyNodeState(term uint64, votedFor int64) {
+// 	ns.mu.Lock()
+// 	defer ns.mu.Unlock()
+// 	ns.Term = term
+// 	ns.VotedFor = votedFor
+// }
 
 func (ns *NodeState) Modify(role string, term uint64, votedFor int64) {
 	ns.mu.Lock()
@@ -84,6 +84,8 @@ func (ns *NodeState) Modify(role string, term uint64, votedFor int64) {
 	}
 	ns.Term = term
 	ns.VotedFor = votedFor
+
+	//persist the data into another separate file and every write should overwrite the previous data
 }
 
 func (ns *NodeState) UpdateRole(role string) error {

@@ -386,12 +386,15 @@ func listenAndReplyToLeader(self *NodeState) {
 
 		} else if data.Term == self.Term {
 			// check what is to be done of the entries and act accordingly
+			if data.
 			reply = &proto.AppendEntriesReply{
 				Term:          self.Term,
 				ConflictIndex: 0,
 				ConflictTerm:  0,
 				Success:       true,
 			}
+		} else {
+			self.Modify(RoleFollower, data.Term, -1)
 		}
 
 		replyPayload := proto.MustMarshal(reply)

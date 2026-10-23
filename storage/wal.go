@@ -34,8 +34,6 @@ type WAL struct {
 	maxFileSize         int64
 	maxSegments         int64
 	currentSegmentIndex int64
-	VotedFor            int64
-	term                uint64
 	ctx                 context.Context
 	cancel              context.CancelFunc
 }
@@ -100,8 +98,6 @@ func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments 
 		maxFileSize:         maxFileSize,
 		maxSegments:         maxSegments,
 		currentSegmentIndex: lastSegmentID,
-		VotedFor:            -1,
-		term:                1,
 		ctx:                 ctx,
 		cancel:              cancel,
 	}
@@ -168,8 +164,6 @@ func (w *WAL) WriteEntry(cmd proto.Command, key string, val []byte) error {
 
 	entry := &proto.LogEntry{
 		Index:    nextSeq,
-		Term:     w.term,
-		VotedFor: w.VotedFor,
 		Key:      key,
 		Value:    val,
 		Command:  cmd,

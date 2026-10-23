@@ -1,5 +1,6 @@
 syntax = "proto3";
-option go_package = "./;main";
+package proto;
+option go_package = "iron-bank/proto";
 
 message BloomFilter {
     repeated  bool bitSet = 1;

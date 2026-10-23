@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"iron-bank/cluster"
+	"iron-bank/storage"
 )
 
 // ── normalizeAddr / extractPort ───────────────────────────────────────────────
@@ -69,7 +74,7 @@ func TestResolveConfig(t *testing.T) {
 		if cfg.TCPAddr != ":7001" {
 			t.Errorf("TCPAddr: got %q, want :7001", cfg.TCPAddr)
 		}
-		if cfg.Role != RoleLeader {
+		if cfg.Role != cluster.RoleLeader {
 			t.Errorf("Role: got %q, want leader", cfg.Role)
 		}
 		if cfg.DataDir != filepath.Join("data", "1") {
@@ -156,9 +161,9 @@ func TestResolveConfig(t *testing.T) {
 // ── NodeState ─────────────────────────────────────────────────────────────────
 
 func TestNodeStateModifyNodeState(t *testing.T) {
-	ns := NewNodeState(1, ":8001", ":7001", RoleFollower, 0, -1)
+	ns := cluster.NewNodeState(1, ":8001", ":7001", cluster.RoleFollower, 0, -1)
 	snap := ns.Snapshot()
-	if snap.ID != 1 || snap.Role != RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
+	if snap.ID != 1 || snap.Role != cluster.RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
 		t.Fatalf("unexpected initial snapshot: %+v", snap)
 	}
 
@@ -170,13 +175,13 @@ func TestNodeStateModifyNodeState(t *testing.T) {
 }
 
 func TestNodeStateMergeFlags(t *testing.T) {
-	ns := &NodeState{}
-	ns.MergeFlags(1, ":8001", ":7001", RoleFollower)
-	ns.MergeFlags(0, "", "", RoleLeader)
+	ns := &cluster.NodeState{}
+	ns.MergeFlags(1, ":8001", ":7001", cluster.RoleFollower)
+	ns.MergeFlags(0, "", "", cluster.RoleLeader)
 	snap := ns.Snapshot()
 
-	if snap.Role != RoleLeader {
-		t.Errorf("expected role=%q, got %q", RoleLeader, snap.Role)
+	if snap.Role != cluster.RoleLeader {
+		t.Errorf("expected role=%q, got %q", cluster.RoleLeader, snap.Role)
 	}
 	if snap.ID != 1 || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" {
 		t.Errorf("fields should be preserved: %+v", snap)
@@ -184,11 +189,11 @@ func TestNodeStateMergeFlags(t *testing.T) {
 }
 
 func TestNodeStateUpdateRole(t *testing.T) {
-	ns := &NodeState{ID: 1, Role: RoleFollower}
-	if err := ns.UpdateRole(RoleLeader); err != nil {
+	ns := &cluster.NodeState{ID: 1, Role: cluster.RoleFollower}
+	if err := ns.UpdateRole(cluster.RoleLeader); err != nil {
 		t.Fatal(err)
 	}
-	if ns.Snapshot().Role != RoleLeader {
+	if ns.Snapshot().Role != cluster.RoleLeader {
 		t.Error("role not updated after UpdateRole")
 	}
 }
@@ -196,14 +201,14 @@ func TestNodeStateUpdateRole(t *testing.T) {
 // ── PeerMap ───────────────────────────────────────────────────────────────────
 
 func TestPeerMapOperations(t *testing.T) {
-	pm := NewPeerMap()
+	pm := cluster.NewPeerMap()
 
 	if pm.Len() != 0 {
 		t.Fatal("expected empty map")
 	}
 
-	p1 := PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleLeader}
-	p2 := PeerInfo{ID: 2, HTTPAddr: ":8002", TCPAddr: ":7002", Role: RoleFollower}
+	p1 := cluster.PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: cluster.RoleLeader}
+	p2 := cluster.PeerInfo{ID: 2, HTTPAddr: ":8002", TCPAddr: ":7002", Role: cluster.RoleFollower}
 
 	pm.Add(p1)
 	pm.Add(p2)
@@ -213,14 +218,14 @@ func TestPeerMapOperations(t *testing.T) {
 	}
 
 	got, ok := pm.Get(1)
-	if !ok || got.Role != RoleLeader {
+	if !ok || got.Role != cluster.RoleLeader {
 		t.Errorf("Get(1): %+v ok=%v", got, ok)
 	}
 
 	// Re-add should overwrite.
-	pm.Add(PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: RoleFollower})
+	pm.Add(cluster.PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: ":7001", Role: cluster.RoleFollower})
 	got, _ = pm.Get(1)
-	if got.Role != RoleFollower {
+	if got.Role != cluster.RoleFollower {
 		t.Errorf("Add should overwrite: want follower, got %q", got.Role)
 	}
 
@@ -235,9 +240,9 @@ func TestPeerMapOperations(t *testing.T) {
 
 func TestPeerMapLeaderAndFollowerHelpers(t *testing.T) {
 	// From node 1's perspective: peers are 2 and 3
-	pmLeader := NewPeerMap()
-	pmLeader.Add(PeerInfo{ID: 2, TCPAddr: ":7002", Role: RoleFollower})
-	pmLeader.Add(PeerInfo{ID: 3, TCPAddr: ":7003", Role: RoleFollower})
+	pmLeader := cluster.NewPeerMap()
+	pmLeader.Add(cluster.PeerInfo{ID: 2, TCPAddr: ":7002", Role: cluster.RoleFollower})
+	pmLeader.Add(cluster.PeerInfo{ID: 3, TCPAddr: ":7003", Role: cluster.RoleFollower})
 
 	// Leader helper: leader wants all followers to send messages to
 	followers := pmLeader.Followers()
@@ -251,9 +256,9 @@ func TestPeerMapLeaderAndFollowerHelpers(t *testing.T) {
 	}
 
 	// From node 2's perspective (follower): peers are 1 (leader) and 3 (follower)
-	pmFollower := NewPeerMap()
-	pmFollower.Add(PeerInfo{ID: 1, TCPAddr: ":7001", Role: RoleLeader})
-	pmFollower.Add(PeerInfo{ID: 3, TCPAddr: ":7003", Role: RoleFollower})
+	pmFollower := cluster.NewPeerMap()
+	pmFollower.Add(cluster.PeerInfo{ID: 1, TCPAddr: ":7001", Role: cluster.RoleLeader})
+	pmFollower.Add(cluster.PeerInfo{ID: 3, TCPAddr: ":7003", Role: cluster.RoleFollower})
 
 	// Follower helper: check who the leader is
 	leader, found := pmFollower.Leader()
@@ -290,11 +295,11 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	defer ln2.Close()
 	addr2 := ln2.Addr().String()
 
-	pm1 := NewPeerMap()
-	self1 := PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: addr1, Role: RoleLeader}
+	pm1 := cluster.NewPeerMap()
+	self1 := cluster.PeerInfo{ID: 1, HTTPAddr: ":8001", TCPAddr: addr1, Role: cluster.RoleLeader}
 
-	pm2 := NewPeerMap()
-	self2 := &NodeState{ID: 2, HTTPAddr: ":8002", TCPAddr: addr2, Role: RoleFollower}
+	pm2 := cluster.NewPeerMap()
+	self2 := &cluster.NodeState{ID: 2, HTTPAddr: ":8002", TCPAddr: addr2, Role: cluster.RoleFollower}
 
 	// Run accept loops for both nodes
 	go func() {
@@ -313,7 +318,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go pm2.HandleTCPConnection(conn, PeerInfo{
+			go pm2.HandleTCPConnection(conn, cluster.PeerInfo{
 				ID:       self2.ID,
 				HTTPAddr: self2.HTTPAddr,
 				TCPAddr:  self2.TCPAddr,
@@ -333,7 +338,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	if !ok {
 		t.Fatal("node 1 did not register node 2 in peer map")
 	}
-	if p2.Role != RoleFollower || p2.TCPAddr != addr2 {
+	if p2.Role != cluster.RoleFollower || p2.TCPAddr != addr2 {
 		t.Errorf("node 1 recorded incorrect info for node 2: %+v", p2)
 	}
 
@@ -342,7 +347,7 @@ func TestPeerMapNetworkAnnouncement(t *testing.T) {
 	if !ok {
 		t.Fatal("node 2 did not register node 1 from ack")
 	}
-	if p1.Role != RoleLeader || p1.TCPAddr != addr1 {
+	if p1.Role != cluster.RoleLeader || p1.TCPAddr != addr1 {
 		t.Errorf("node 2 recorded incorrect info for node 1: %+v", p1)
 	}
 
@@ -382,12 +387,12 @@ func TestMultipleProcessesStorageIsolation(t *testing.T) {
 	dir1 := filepath.Join(base, "node1")
 	dir2 := filepath.Join(base, "node2")
 
-	lsm1, err := Open(dir1, 100, true)
+	lsm1, err := storage.Open(dir1, 100, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lsm1.Close()
-	lsm2, err := Open(dir2, 100, true)
+	lsm2, err := storage.Open(dir2, 100, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,9 +418,9 @@ func TestMultipleProcessesStorageIsolation(t *testing.T) {
 	_ = lsm2.Close()
 
 	// Reopen and verify WAL recovery restores data.
-	r1, _ := Open(dir1, 100, true)
+	r1, _ := storage.Open(dir1, 100, true)
 	defer r1.Close()
-	r2, _ := Open(dir2, 100, true)
+	r2, _ := storage.Open(dir2, 100, true)
 	defer r2.Close()
 
 	for i := 0; i < 20; i++ {
@@ -433,26 +438,26 @@ func TestMultipleProcessesStorageIsolation(t *testing.T) {
 func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	base := t.TempDir()
 
-	ns := &NodeState{
+	ns := &cluster.NodeState{
 		ID:       1,
 		HTTPAddr: ":28001",
 		TCPAddr:  ":27001",
-		Role:     RoleLeader,
+		Role:     cluster.RoleLeader,
 	}
 
-	lsm, err := Open(filepath.Join(base, "lsm"), 4096, true)
+	lsm, err := storage.Open(filepath.Join(base, "lsm"), 4096, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lsm.Close()
 
-	pm := NewPeerMap()
-	pm.Add(PeerInfo{ID: 2, TCPAddr: ":27002", Role: RoleFollower})
+	pm := cluster.NewPeerMap()
+	pm.Add(cluster.PeerInfo{ID: 2, TCPAddr: ":27002", Role: cluster.RoleFollower})
 
 	srv := &Server{lsm: lsm}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /put",   srv.add)
-	mux.HandleFunc("GET /get",    srv.get)
+	mux.HandleFunc("POST /put", srv.add)
+	mux.HandleFunc("GET /get", srv.get)
 	mux.HandleFunc("DELETE /del", srv.delete)
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		s := ns.Snapshot()
@@ -497,7 +502,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 	if fmt.Sprintf("%v", status["id"]) != "1" {
 		t.Errorf("/status id: got %v", status["id"])
 	}
-	if status["role"] != string(RoleLeader) {
+	if status["role"] != string(cluster.RoleLeader) {
 		t.Errorf("/status role: got %v", status["role"])
 	}
 
@@ -507,7 +512,7 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp2.Body.Close()
-	var peers []PeerInfo
+	var peers []cluster.PeerInfo
 	_ = json.NewDecoder(resp2.Body).Decode(&peers)
 	if len(peers) != 1 || peers[0].ID != 2 {
 		t.Errorf("/peers: got %+v", peers)
@@ -515,4 +520,59 @@ func TestHTTPStatusAndPeersEndpoints(t *testing.T) {
 
 	// KV round-trip through HTTP
 	// (uses the existing lsm_test HTTP helpers indirectly)
+}
+
+func TestHTTPServerAPI(t *testing.T) {
+	lsm, err := storage.Open(t.TempDir(), 1024, true)
+	if err != nil {
+		t.Fatalf("open failed: %v", err)
+	}
+	defer lsm.Close()
+
+	srv := &Server{lsm: lsm}
+
+	putReq := httptest.NewRequest("POST", "/put", strings.NewReader(`{"key":"hello","val":"world"}`))
+	putRec := httptest.NewRecorder()
+	srv.add(putRec, putReq)
+	if putRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d", putRec.Code)
+	}
+
+	getReq := httptest.NewRequest("GET", "/get", strings.NewReader(`{"key":"hello"}`))
+	getRec := httptest.NewRecorder()
+	srv.get(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", getRec.Code)
+	}
+	if !bytes.Contains(getRec.Body.Bytes(), []byte("world")) {
+		t.Fatalf("expected body containing world, got %s", getRec.Body.String())
+	}
+
+	getReq2 := httptest.NewRequest("GET", "/get?key=hello", nil)
+	getRec2 := httptest.NewRecorder()
+	srv.get(getRec2, getReq2)
+	if getRec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", getRec2.Code)
+	}
+
+	getReq3 := httptest.NewRequest("GET", "/get?key=unknown", nil)
+	getRec3 := httptest.NewRecorder()
+	srv.get(getRec3, getReq3)
+	if getRec3.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 NotFound, got %d", getRec3.Code)
+	}
+
+	delReq := httptest.NewRequest("DELETE", "/del?key=hello", nil)
+	delRec := httptest.NewRecorder()
+	srv.delete(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", delRec.Code)
+	}
+
+	getReq4 := httptest.NewRequest("GET", "/get?key=hello", nil)
+	getRec4 := httptest.NewRecorder()
+	srv.get(getRec4, getReq4)
+	if getRec4.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 NotFound after delete, got %d", getRec4.Code)
+	}
 }

@@ -1,7 +1,8 @@
-package main
+package storage
 
 import (
 	"fmt"
+	"iron-bank/proto"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,13 +106,13 @@ func TestRangeScan(t *testing.T) {
 		assert.Equal(t, []byte("value1"), entries[0].Value)
 		assert.NotNil(t, entries[0].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[1].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[1].Command)
 		assert.NotNil(t, entries[1].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value3"), entries[2].Value)
 		assert.NotNil(t, entries[2].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[3].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[3].Command)
 		assert.NotNil(t, entries[3].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value5"), entries[4].Value)
@@ -194,13 +195,13 @@ func TestRangeScanNonExactRange1(t *testing.T) {
 		assert.Equal(t, []byte("value1"), entries[0].Value)
 		assert.NotNil(t, entries[0].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[1].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[1].Command)
 		assert.NotNil(t, entries[1].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value3"), entries[2].Value)
 		assert.NotNil(t, entries[2].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[3].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[3].Command)
 		assert.NotNil(t, entries[3].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value5"), entries[4].Value)
@@ -251,13 +252,13 @@ func TestRangeScanWithUpdatedEntries(t *testing.T) {
 		assert.Equal(t, []byte("value1-updated"), entries[0].Value)
 		assert.NotNil(t, entries[0].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[1].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[1].Command)
 		assert.NotNil(t, entries[1].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value3-updated"), entries[2].Value)
 		assert.NotNil(t, entries[2].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[3].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[3].Command)
 		assert.NotNil(t, entries[3].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value5-updated"), entries[4].Value)
@@ -342,13 +343,13 @@ func TestGetEntries(t *testing.T) {
 		assert.Equal(t, []byte("value1"), entries[0].Value)
 		assert.NotNil(t, entries[0].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[1].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[1].Command)
 		assert.NotNil(t, entries[1].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value3"), entries[2].Value)
 		assert.NotNil(t, entries[2].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[3].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[3].Command)
 		assert.NotNil(t, entries[3].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, []byte("value5"), entries[4].Value)
@@ -390,7 +391,7 @@ func TestSSTableIterator(t *testing.T) {
 		iter := sstable.Front()
 
 		// Read all entries from the SSTable.
-		entries := make([]*LSMEntry, 0)
+		entries := make([]*proto.LSMEntry, 0)
 		for iter != nil {
 			entries = append(entries, iter.Value)
 			iter = iter.Next()
@@ -400,13 +401,13 @@ func TestSSTableIterator(t *testing.T) {
 		assert.Equal(t, "value1", string(entries[0].Value))
 		assert.NotNil(t, entries[0].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[1].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[1].Command)
 		assert.NotNil(t, entries[1].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, "value3", string(entries[2].Value))
 		assert.NotNil(t, entries[2].Timestamp, "Timestamp should not be nil")
 
-		assert.Equal(t, Command_DELETE, entries[3].Command)
+		assert.Equal(t, proto.Command_DELETE, entries[3].Command)
 		assert.NotNil(t, entries[3].Timestamp, "Timestamp should not be nil")
 
 		assert.Equal(t, "value5", string(entries[4].Value))

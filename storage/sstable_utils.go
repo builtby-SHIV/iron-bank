@@ -1,30 +1,14 @@
-package main
+package storage
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"os"
 
-	"google.golang.org/protobuf/proto"
+	"iron-bank/proto"
 )
 
-func MustMarshal[T proto.Message](pb T) []byte {
-	bytes, err := proto.Marshal(pb)
-	if err != nil {
-		panic(fmt.Sprintf("failed to marhshal proto %v", err))
-	}
-	return bytes
-}
-
-func MustUnmarshal [T proto.Message](bytes []byte, pb T) {
-	err := proto.Unmarshal(bytes, pb)
-	if err != nil {
-		panic(fmt.Sprintf("failed to unmarhshal proto %v", err))
-	}
-}
-
-func FindOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
+func FindOffsetForKey(index []*proto.IndexEntry, key string) (bool, int64) {
 	l := 0
 	h := len(index) - 1
 
@@ -42,7 +26,7 @@ func FindOffsetForKey(index []*IndexEntry, key string) (bool, int64) {
 	return false, 0
 }
 
-func FindOffsetForRangeKey(index []*IndexEntry, key string) (bool, int64) {
+func FindOffsetForRangeKey(index []*proto.IndexEntry, key string) (bool, int64) {
 	l := 0
 	h := len(index) - 1
 
@@ -80,7 +64,7 @@ func ReadDataEntry(file *os.File, size int64) ([]byte, error) {
 	return data, nil
 }
 
-func ReadSSTableMetaData(file *os.File) (*BloomFilter, *Index, int64, error) {
+func ReadSSTableMetaData(file *os.File) (*BloomFilter, *proto.Index, int64, error) {
 	var dataOffset int64 = 0
 
 	bloomFilterSize, err := ReadDataSize(file)
@@ -107,10 +91,14 @@ func ReadSSTableMetaData(file *os.File) (*BloomFilter, *Index, int64, error) {
 	}
 	dataOffset += int64(len(indexData))
 
-	bloomFilter := &BloomFilter{}
-	MustUnmarshal(bloomFilterData, bloomFilter)
-	index := &Index{}
-	MustUnmarshal(indexData, index)
+	serializedBloomFilter := &proto.BloomFilter{}
+	proto.MustUnmarshal(bloomFilterData, serializedBloomFilter)
+	bloomFilter := &BloomFilter{
+		BitSet: serializedBloomFilter.BitSet,
+		Size:   serializedBloomFilter.Size,
+	}
+	index := &proto.Index{}
+	proto.MustUnmarshal(indexData, index)
 
 	return bloomFilter, index, dataOffset, nil
 }

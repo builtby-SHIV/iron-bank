@@ -1,11 +1,12 @@
-package main
+package storage
 
 import (
 	"container/heap"
+	"iron-bank/proto"
 )
 
 type heapEntry struct {
-	entry     *LSMEntry
+	entry     *proto.LSMEntry
 	listIndex int
 	idx       int
 	iterator  *SSTableIterator
@@ -75,7 +76,7 @@ func (h *rangeMergeHeap) Pop() interface{} {
 	return x
 }
 
-func mergeRanges(ranges [][]*LSMEntry) []KVPair {
+func mergeRanges(ranges [][]*proto.LSMEntry) []KVPair {
 	minHeap := &rangeMergeHeap{}
 	heap.Init(minHeap)
 
@@ -114,7 +115,7 @@ func mergeRanges(ranges [][]*LSMEntry) []KVPair {
 	return results
 }
 
-func mergeIterators(iterators []*SSTableIterator, dropTombstones bool) []*LSMEntry {
+func mergeIterators(iterators []*SSTableIterator, dropTombstones bool) []*proto.LSMEntry {
 	minHeap := &mergeHeap{}
 	heap.Init(minHeap)
 
@@ -125,7 +126,7 @@ func mergeIterators(iterators []*SSTableIterator, dropTombstones bool) []*LSMEnt
 		heap.Push(minHeap, heapEntry{entry: iterator.value, iterator: iterator, listIndex: i})
 	}
 
-	var results []*LSMEntry
+	var results []*proto.LSMEntry
 
 	for minHeap.Len() > 0 {
 		top := heap.Pop(minHeap).(heapEntry)

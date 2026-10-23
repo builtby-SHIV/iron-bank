@@ -1,12 +1,10 @@
-package main
+package storage
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
+	"iron-bank/proto"
 	"math/rand"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +73,7 @@ func TestMemtable(t *testing.T) {
 	// Delete key
 	m.Del("k2")
 	entry = m.Get("k2")
-	if entry == nil || entry.Command != Command_DELETE {
+	if entry == nil || entry.Command != proto.Command_DELETE {
 		t.Fatalf("expected delete tombstone, got %v", entry)
 	}
 
@@ -95,10 +93,10 @@ func TestSSTableBasic(t *testing.T) {
 	dir := t.TempDir()
 	sstPath := filepath.Join(dir, "sstable_0_1")
 
-	entries := []*LSMEntry{
-		{Key: "apple", Value: []byte("red"), Command: Command_PUT, Timestamp: 100},
-		{Key: "banana", Value: []byte("yellow"), Command: Command_PUT, Timestamp: 101},
-		{Key: "cherry", Value: []byte("darkred"), Command: Command_PUT, Timestamp: 102},
+	entries := []*proto.LSMEntry{
+		{Key: "apple", Value: []byte("red"), Command: proto.Command_PUT, Timestamp: 100},
+		{Key: "banana", Value: []byte("yellow"), Command: proto.Command_PUT, Timestamp: 101},
+		{Key: "cherry", Value: []byte("darkred"), Command: proto.Command_PUT, Timestamp: 102},
 	}
 
 	sst, err := SerializeToSSTable(entries, sstPath)
@@ -173,7 +171,7 @@ func TestWAL(t *testing.T) {
 
 	// Write entries triggering rotation
 	for i := 0; i < 20; i++ {
-		err := wal.WriteEntry(Command_PUT, fmt.Sprintf("k-%03d", i), []byte(fmt.Sprintf("v-%03d", i)))
+		err := wal.WriteEntry(proto.Command_PUT, fmt.Sprintf("k-%03d", i), []byte(fmt.Sprintf("v-%03d", i)))
 		if err != nil {
 			t.Fatalf("failed to write wal entry: %v", err)
 		}
@@ -384,74 +382,6 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	wg.Wait()
 }
 
-func TestHTTPServerAPI(t *testing.T) {
-	dir := t.TempDir()
-	lsm, err := Open(dir, 1024, true)
-	if err != nil {
-		t.Fatalf("open failed: %v", err)
-	}
-	defer lsm.Close()
-
-	srv := &Server{lsm: lsm}
-
-	// Test PUT
-	putReq := httptest.NewRequest("POST", "/put", strings.NewReader(`{"key":"hello","val":"world"}`))
-	putRec := httptest.NewRecorder()
-	srv.add(putRec, putReq)
-
-	if putRec.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created, got %d", putRec.Code)
-	}
-
-	// Test GET with JSON body
-	getReq := httptest.NewRequest("GET", "/get", strings.NewReader(`{"key":"hello"}`))
-	getRec := httptest.NewRecorder()
-	srv.get(getRec, getReq)
-
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", getRec.Code)
-	}
-	if !bytes.Contains(getRec.Body.Bytes(), []byte("world")) {
-		t.Fatalf("expected body containing world, got %s", getRec.Body.String())
-	}
-
-	// Test GET with query param ?key=hello
-	getReq2 := httptest.NewRequest("GET", "/get?key=hello", nil)
-	getRec2 := httptest.NewRecorder()
-	srv.get(getRec2, getReq2)
-
-	if getRec2.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", getRec2.Code)
-	}
-
-	// Test GET nonexistent key
-	getReq3 := httptest.NewRequest("GET", "/get?key=unknown", nil)
-	getRec3 := httptest.NewRecorder()
-	srv.get(getRec3, getReq3)
-
-	if getRec3.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 NotFound, got %d", getRec3.Code)
-	}
-
-	// Test DELETE
-	delReq := httptest.NewRequest("DELETE", "/del?key=hello", nil)
-	delRec := httptest.NewRecorder()
-	srv.delete(delRec, delReq)
-
-	if delRec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", delRec.Code)
-	}
-
-	// Test GET after DELETE
-	getReq4 := httptest.NewRequest("GET", "/get?key=hello", nil)
-	getRec4 := httptest.NewRecorder()
-	srv.get(getRec4, getReq4)
-
-	if getRec4.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 NotFound after delete, got %d", getRec4.Code)
-	}
-}
-
 func TestTombstonePreservedDuringCompaction(t *testing.T) {
 	dir := t.TempDir()
 
@@ -493,4 +423,3 @@ func TestTombstonePreservedDuringCompaction(t *testing.T) {
 
 	_ = lsm.Close()
 }
-

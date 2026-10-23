@@ -1,6 +1,7 @@
-package main
+package storage
 
 import (
+	"iron-bank/proto"
 	"time"
 
 	"github.com/huandu/skiplist"
@@ -42,43 +43,43 @@ func (m *Memtable) SizeInBytes() int64 {
 func (m *Memtable) Put(key string, val []byte) {
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		oldEntry := keyExists.Value.(*LSMEntry)
+		oldEntry := keyExists.Value.(*proto.LSMEntry)
 		m.size += int64(len(val)) - int64(len(oldEntry.Value))
 	} else {
 		m.size += int64(len(key)) + int64(len(val))
 	}
-	entry := getLSMEntry(key, &val, Command_PUT)
+	entry := getLSMEntry(key, &val, proto.Command_PUT)
 	m.data.Set(key, entry)
 }
 
 func (m *Memtable) Del(key string) {
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		oldEntry := keyExists.Value.(*LSMEntry)
+		oldEntry := keyExists.Value.(*proto.LSMEntry)
 		m.size -= int64(len(oldEntry.Value))
 	} else {
 		m.size += int64(len(key))
 	}
-	m.data.Set(key, getLSMEntry(key, nil, Command_DELETE))
+	m.data.Set(key, getLSMEntry(key, nil, proto.Command_DELETE))
 }
 
-func (m *Memtable) Get(key string) *LSMEntry {
+func (m *Memtable) Get(key string) *proto.LSMEntry {
 	keyExists := m.data.Get(key)
 	if keyExists != nil {
-		return keyExists.Value.(*LSMEntry)
+		return keyExists.Value.(*proto.LSMEntry)
 	}
 	return nil
 }
 
-func (m *Memtable) RangeScan(start, end string) []*LSMEntry {
-	var results []*LSMEntry
+func (m *Memtable) RangeScan(start, end string) []*proto.LSMEntry {
+	var results []*proto.LSMEntry
 	iter := m.data.Find(start)
 	for iter != nil {
 		if iter.Key().(string) > end {
 			break
 		}
 
-		results = append(results, iter.Value.(*LSMEntry))
+		results = append(results, iter.Value.(*proto.LSMEntry))
 		iter = iter.Next()
 	}
 	return results
@@ -88,18 +89,18 @@ func (m *Memtable) SizeInbytes() int64 {
 	return m.size
 }
 
-func (m *Memtable) GetEntries() [] *LSMEntry {
-	var results []*LSMEntry
+func (m *Memtable) GetEntries() []*proto.LSMEntry {
+	var results []*proto.LSMEntry
 	iter := m.data.Front()
 	for iter != nil {
-		results = append(results, iter.Value.(*LSMEntry))
+		results = append(results, iter.Value.(*proto.LSMEntry))
 		iter = iter.Next()
 	}
 	return results
 }
 
-func getLSMEntry(key string, value *[]byte, command Command) *LSMEntry {
-	entry := &LSMEntry{
+func getLSMEntry(key string, value *[]byte, command proto.Command) *proto.LSMEntry {
+	entry := &proto.LSMEntry{
 		Key:       key,
 		Command:   command,
 		Timestamp: time.Now().UnixNano(),

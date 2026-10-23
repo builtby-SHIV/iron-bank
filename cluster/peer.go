@@ -1,4 +1,4 @@
-package main
+package cluster
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"iron-bank/proto"
 )
 
 type MessageType string
@@ -37,12 +39,12 @@ type PeerMap struct {
 }
 
 const (
-	MsgAnnounce				= "ANNOUNCE"
-	MsgAnnounceAck 			= "ANNOUNCE_ACK"
-	MsgAppendEntries		= 1
-    MsgRequestVote			= 2
-	MsgAppendEntriesReply	= 3
-	MsgRequestVoteReply		= 4
+	MsgAnnounce           = "ANNOUNCE"
+	MsgAnnounceAck        = "ANNOUNCE_ACK"
+	MsgAppendEntries      = 1
+	MsgRequestVote        = 2
+	MsgAppendEntriesReply = 3
+	MsgRequestVoteReply   = 4
 )
 
 func NewPeerMap() *PeerMap {
@@ -203,11 +205,11 @@ func (pm *PeerMap) AnnounceTo(targetTCP string, self *NodeState, timeout time.Du
 	}
 
 	if reply.Role == RoleFollower && self.Role == RoleLeader {
-		send := make(chan *AppendEntriesArgs)
-		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1 * reply.SenderID) * (time.Second), self)
+		send := make(chan *proto.AppendEntriesArgs)
+		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1*reply.SenderID)*(time.Second), self)
 	} else if reply.Role == RoleLeader && self.Role == RoleFollower {
 		go listenAndReplyToLeader(self)
-	} 
+	}
 
 	return nil
 }
@@ -236,7 +238,7 @@ func (pm *PeerMap) String() string {
 	return b.String()
 }
 
-func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx context.Context, interval time.Duration, self *NodeState) error {
+func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArgs, ctx context.Context, interval time.Duration, self *NodeState) error {
 	var dialer net.Dialer
 	var conn net.Conn
 	var err error
@@ -255,12 +257,12 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 
 	for {
 		select {
-		case data := <- send:
+		case data := <-send:
 			PrevLogIndex = data.PrevLogIndex
 			PrevLogTerm = data.PrevLogIndex
 			LeaderCommit = data.LeaderCommit
 
-			payload := MustMarshal(data)
+			payload := proto.MustMarshal(data)
 
 			size := uint64(len(payload))
 			header := make([]byte, 8)
@@ -278,7 +280,7 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 				return err
 			}
 
-			_, err := io.ReadFull(conn, header) 
+			_, err := io.ReadFull(conn, header)
 			if err != nil {
 				fmt.Println("Connection closed or read error:", err)
 				return err
@@ -292,8 +294,8 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 				return err
 			}
 
-			reply := &AppendEntriesReply{}
-			MustUnmarshal(payload, reply)
+			reply := &proto.AppendEntriesReply{}
+			proto.MustUnmarshal(payload, reply)
 
 			if !reply.Success {
 				//access previous entries and check where is it lagging behind
@@ -301,17 +303,17 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 				ticker.Reset(interval)
 				continue
 			}
-			
-		case t := <- ticker.C:
-			emptyPayload := &AppendEntriesArgs{
-				Term: self.Term,
-				LeaderID: self.ID,
+
+		case t := <-ticker.C:
+			emptyPayload := &proto.AppendEntriesArgs{
+				Term:         self.Term,
+				LeaderID:     self.ID,
 				PrevLogIndex: PrevLogIndex,
-				PrevLogTerm: PrevLogTerm,
+				PrevLogTerm:  PrevLogTerm,
 				LeaderCommit: LeaderCommit,
-				Entries: [] *LogEntry{},
+				Entries:      []*proto.LogEntry{},
 			}
-			payload := MustMarshal(emptyPayload)
+			payload := proto.MustMarshal(emptyPayload)
 			size := uint64(len(payload))
 			header := make([]byte, 8)
 			binary.LittleEndian.PutUint64(header, size)
@@ -326,7 +328,7 @@ func sendAndListenToFollower(targetTCP string, send chan *AppendEntriesArgs, ctx
 				return err
 			}
 			fmt.Printf("Executed at: %s\n", t.Format("15:04:05"))
-		case <- ctx.Done():
+		case <-ctx.Done():
 			fmt.Println("[Goroutine] Context cancelled cleaning up and exiting...")
 			return ctx.Err()
 		}
@@ -353,9 +355,9 @@ func listenAndReplyToLeader(self *NodeState) {
 		return
 	}
 	msgType := typeBuf[0]
-	
+
 	header := make([]byte, 8)
-	_, err = io.ReadFull(conn, header) 
+	_, err = io.ReadFull(conn, header)
 	if err != nil {
 		fmt.Println("Connection closed or read error:", err)
 		return
@@ -368,31 +370,31 @@ func listenAndReplyToLeader(self *NodeState) {
 		fmt.Println("Failed to read complete payload:", err)
 		return
 	}
-	
+
 	if msgType == MsgAppendEntries {
-		data := &AppendEntriesArgs{}
-		MustUnmarshal(payload, data)
-		var reply *AppendEntriesReply
-		
+		data := &proto.AppendEntriesArgs{}
+		proto.MustUnmarshal(payload, data)
+		var reply *proto.AppendEntriesReply
+
 		if data.Term < self.Term {
-			reply = &AppendEntriesReply{
-				Term: self.Term,
+			reply = &proto.AppendEntriesReply{
+				Term:          self.Term,
 				ConflictIndex: 0,
-				ConflictTerm: 0,
-				Success: false,
+				ConflictTerm:  0,
+				Success:       false,
 			}
-			
+
 		} else if data.Term == self.Term {
 			// check what is to be done of the entries and act accordingly
-			reply = &AppendEntriesReply{
-				Term: self.Term,
+			reply = &proto.AppendEntriesReply{
+				Term:          self.Term,
 				ConflictIndex: 0,
-				ConflictTerm: 0,
-				Success: true,
+				ConflictTerm:  0,
+				Success:       true,
 			}
 		}
 
-		replyPayload := MustMarshal(reply)
+		replyPayload := proto.MustMarshal(reply)
 		size := uint64(len(replyPayload))
 		binary.BigEndian.AppendUint64(header, size)
 

@@ -1,10 +1,11 @@
-package main
+package storage
 
 import (
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"iron-bank/proto"
 	"os"
 	"path/filepath"
 	"slices"
@@ -149,6 +150,10 @@ func (l *LSMTree) Close() error {
 	}
 
 	return nil
+}
+
+func (l *LSMTree) LastLogEntry() (*proto.LogEntry, error) {
+	return l.wal.getLastEntryInLog()
 }
 
 func (l *LSMTree) backgroundCompaction() {
@@ -336,7 +341,7 @@ func (l *LSMTree) PUT(key string, val []byte) error {
 	defer l.mu.Unlock()
 
 	if !l.inRecovery {
-		if err := l.wal.WriteEntry(Command_PUT, key, val); err != nil {
+		if err := l.wal.WriteEntry(proto.Command_PUT, key, val); err != nil {
 			return err
 		}
 	}
@@ -359,7 +364,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 	l.mu.RUnlock()
 
 	if val != nil {
-		if val.Command == Command_DELETE {
+		if val.Command == proto.Command_DELETE {
 			return "", &NotFoundError{key: key}
 		}
 		return string(val.Value), nil
@@ -370,7 +375,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 		entry := l.flushingQueue[i].Get(key)
 		if entry != nil {
 			l.flushingQueueMu.RUnlock()
-			if entry.Command == Command_DELETE {
+			if entry.Command == proto.Command_DELETE {
 				return "", &NotFoundError{key: key}
 			}
 			return string(entry.Value), nil
@@ -388,7 +393,7 @@ func (l *LSMTree) GET(key string) (string, error) {
 			}
 			if entry != nil {
 				l.levels[i].mu.RUnlock()
-				if entry.Command == Command_DELETE {
+				if entry.Command == proto.Command_DELETE {
 					return "", &NotFoundError{key: key}
 				}
 				return string(entry.Value), nil
@@ -409,7 +414,7 @@ func (l *LSMTree) DELETE(key string) error {
 	defer l.mu.Unlock()
 
 	if !l.inRecovery {
-		if err := l.wal.WriteEntry(Command_DELETE, key, nil); err != nil {
+		if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil); err != nil {
 			return err
 		}
 	}
@@ -439,7 +444,7 @@ func (l *LSMTree) RangeScan(startKey, endKey string) ([]KVPair, error) {
 		return []KVPair{}, nil
 	}
 
-	var ranges [][]*LSMEntry
+	var ranges [][]*proto.LSMEntry
 
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -623,7 +628,7 @@ func (l *LSMTree) recoverFromWAL() error {
 	return nil
 }
 
-func (l *LSMTree) readEntriesFromWAL() ([]*LogEntry, error) {
+func (l *LSMTree) readEntriesFromWAL() ([]*proto.LogEntry, error) {
 	entries, err := l.wal.ReadAll()
 	if err != nil {
 		repairedEntries, repErr := l.wal.Repair()
@@ -635,13 +640,13 @@ func (l *LSMTree) readEntriesFromWAL() ([]*LogEntry, error) {
 	return entries, nil
 }
 
-func (l *LSMTree) processWALEntry(entry *LogEntry) error {
+func (l *LSMTree) processWALEntry(entry *proto.LogEntry) error {
 	switch entry.Command {
-	case Command_PUT:
+	case proto.Command_PUT:
 		return l.PUT(entry.Key, entry.Value)
-	case Command_DELETE:
+	case proto.Command_DELETE:
 		return l.DELETE(entry.Key)
-	case Command_WRITE_SST:
+	case proto.Command_WRITE_SST:
 		return errors.New("unexpected write sst command in WAL")
 	default:
 		return errors.New("unknown command in WAL")

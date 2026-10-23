@@ -1,15 +1,17 @@
-package main
+package storage
 
 import (
 	"bytes"
 	"encoding/binary"
 	"io"
 	"os"
+
+	"iron-bank/proto"
 )
 
 type SSTable struct {
 	bloomFilter *BloomFilter
-	index       *Index
+	index       *proto.Index
 	file        *os.File
 	dataOffSet  int64
 }
@@ -17,19 +19,22 @@ type SSTable struct {
 type SSTableIterator struct {
 	s     *SSTable
 	file  *os.File
-	Value *LSMEntry
-	value *LSMEntry
+	Value *proto.LSMEntry
+	value *proto.LSMEntry
 }
 
-func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error) {
+func SerializeToSSTable(messages []*proto.LSMEntry, filename string) (*SSTable, error) {
 	bloomFilter, index, entriesBuffer, err := buildMetaDataAndEntriesBuffer(messages)
 
 	if err != nil {
 		return nil, err
 	}
 
-	indexData := MustMarshal(index)
-	bloomFilterData := MustMarshal(bloomFilter)
+	indexData := proto.MustMarshal(index)
+	bloomFilterData := proto.MustMarshal(&proto.BloomFilter{
+		BitSet: bloomFilter.BitSet,
+		Size:   bloomFilter.Size,
+	})
 
 	dataOffSet, err := writeSSTable(filename, bloomFilterData, indexData, entriesBuffer)
 	if err != nil {
@@ -44,18 +49,18 @@ func SerializeToSSTable(messages []*LSMEntry, filename string) (*SSTable, error)
 	return &SSTable{bloomFilter: bloomFilter, index: index, file: file, dataOffSet: dataOffSet}, nil
 }
 
-func buildMetaDataAndEntriesBuffer(messages []*LSMEntry) (*BloomFilter, *Index, *bytes.Buffer, error) {
-	var index []*IndexEntry
-	var bloomFilter *BloomFilter = NewBloomFilter(1000000)
+func buildMetaDataAndEntriesBuffer(messages []*proto.LSMEntry) (*BloomFilter, *proto.Index, *bytes.Buffer, error) {
+	var index []*proto.IndexEntry
+	bloomFilter := NewBloomFilter(1000000)
 	var currentOffset int64 = 0
 	entriesBuffer := &bytes.Buffer{}
 
 	for _, msg := range messages {
-		data := MustMarshal(msg)
+		data := proto.MustMarshal(msg)
 		entrySize := int64(len(data))
 
 		//dense index, 1M keys means 1M keys present in index
-		index = append(index, &IndexEntry{Key: msg.Key, Offset: int64(currentOffset)})
+		index = append(index, &proto.IndexEntry{Key: msg.Key, Offset: int64(currentOffset)})
 		bloomFilter.Add([]byte(msg.Key))
 
 		if err := binary.Write(entriesBuffer, binary.LittleEndian, int64(entrySize)); err != nil {
@@ -68,7 +73,7 @@ func buildMetaDataAndEntriesBuffer(messages []*LSMEntry) (*BloomFilter, *Index, 
 		currentOffset += int64(binary.Size(entrySize)) + int64(entrySize)
 	}
 
-	return bloomFilter, &Index{Entries: index}, entriesBuffer, nil
+	return bloomFilter, &proto.Index{Entries: index}, entriesBuffer, nil
 }
 
 func writeSSTable(filename string, bloomfilterData, indexData []byte, entriesBuffer *bytes.Buffer) (int64, error) {
@@ -122,7 +127,7 @@ func (s *SSTable) Close() error {
 	return nil
 }
 
-func (s *SSTable) Get(key string) (*LSMEntry, error) {
+func (s *SSTable) Get(key string) (*proto.LSMEntry, error) {
 	if s.bloomFilter != nil && !s.bloomFilter.Test([]byte(key)) {
 		return nil, nil
 	}
@@ -144,16 +149,16 @@ func (s *SSTable) Get(key string) (*LSMEntry, error) {
 		return nil, err
 	}
 
-	entry := LSMEntry{}
-	MustUnmarshal(data, &entry)
+	entry := proto.LSMEntry{}
+	proto.MustUnmarshal(data, &entry)
 
 	return &entry, nil
 }
 
-func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
+func (s *SSTable) RangeScan(startKey, endKey string) ([]*proto.LSMEntry, error) {
 	exists, offSet := FindOffsetForRangeKey(s.index.Entries, startKey)
 	if !exists {
-		return []*LSMEntry{}, nil
+		return []*proto.LSMEntry{}, nil
 	}
 
 	currentOffset := s.dataOffSet + offSet
@@ -163,7 +168,7 @@ func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 	}
 	fileSize := fileInfo.Size()
 
-	var res = []*LSMEntry{}
+	var res = []*proto.LSMEntry{}
 	sizeBuf := make([]byte, 8)
 
 	for currentOffset < fileSize {
@@ -182,8 +187,8 @@ func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 		}
 		currentOffset += size
 
-		entry := LSMEntry{}
-		MustUnmarshal(data, &entry)
+		entry := proto.LSMEntry{}
+		proto.MustUnmarshal(data, &entry)
 
 		if entry.Key > endKey {
 			break
@@ -197,14 +202,14 @@ func (s *SSTable) RangeScan(startKey, endKey string) ([]*LSMEntry, error) {
 	return res, nil
 }
 
-func (s *SSTable) GetEntries() ([]*LSMEntry, error) {
+func (s *SSTable) GetEntries() ([]*proto.LSMEntry, error) {
 	fileInfo, err := s.file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	fileSize := fileInfo.Size()
 	currentOffset := s.dataOffSet
-	var entries []*LSMEntry
+	var entries []*proto.LSMEntry
 	sizeBuf := make([]byte, 8)
 
 	for currentOffset < fileSize {
@@ -223,8 +228,8 @@ func (s *SSTable) GetEntries() ([]*LSMEntry, error) {
 		}
 		currentOffset += size
 
-		entry := &LSMEntry{}
-		MustUnmarshal(data, entry)
+		entry := &proto.LSMEntry{}
+		proto.MustUnmarshal(data, entry)
 		entries = append(entries, entry)
 	}
 
@@ -257,8 +262,8 @@ func (s *SSTable) Front() *SSTableIterator {
 		return nil
 	}
 
-	entry := &LSMEntry{}
-	MustUnmarshal(data, entry)
+	entry := &proto.LSMEntry{}
+	proto.MustUnmarshal(data, entry)
 	return &SSTableIterator{s: s, file: file, Value: entry, value: entry}
 }
 
@@ -281,8 +286,8 @@ func (i *SSTableIterator) Next() *SSTableIterator {
 		return nil
 	}
 
-	i.Value = &LSMEntry{}
-	MustUnmarshal(data, i.Value)
+	i.Value = &proto.LSMEntry{}
+	proto.MustUnmarshal(data, i.Value)
 	i.value = i.Value
 	return i
 }

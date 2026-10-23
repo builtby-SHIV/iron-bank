@@ -1,8 +1,9 @@
-package main
+package storage
 
 import (
 	"crypto/rand"
 	"fmt"
+	"iron-bank/proto"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,7 +179,7 @@ func TestBenchmarkReadAmplification(t *testing.T) {
 		startTime := time.Now()
 		for i := 0; i < numQueries; i++ {
 			// Query keys that exist and are not deleted
-			idx := (i*7)%numKeys
+			idx := (i * 7) % numKeys
 			if idx >= 500 && idx < 600 {
 				idx += 100
 			}
@@ -191,11 +192,11 @@ func TestBenchmarkReadAmplification(t *testing.T) {
 			totalUserBytesRead += userBytes
 
 			// Exact physical bytes read from disk in SSTable.Get:
-			// 8 bytes (int64 size prefix) + len(protobuf LSMEntry)
-			protoSize := int64(len(MustMarshal(&LSMEntry{
+			// 8 bytes (int64 size prefix) + len(protobuf proto.LSMEntry)
+			protoSize := int64(len(proto.MustMarshal(&proto.LSMEntry{
 				Key:       queryKey,
 				Value:     []byte(val),
-				Command:   Command_PUT,
+				Command:   proto.Command_PUT,
 				Timestamp: time.Now().UnixNano(),
 			})))
 			diskBytes := 8 + protoSize
@@ -212,7 +213,7 @@ func TestBenchmarkReadAmplification(t *testing.T) {
 		fmt.Printf("Logical User Bytes Read:  %d bytes (%.2f KB)\n", totalUserBytesRead, float64(totalUserBytesRead)/1024)
 		fmt.Printf("Physical Disk Bytes Read: %d bytes (%.2f KB)\n", totalDiskBytesRead, float64(totalDiskBytesRead)/1024)
 		fmt.Printf("Read Amplification (RAF): %.2fx\n", raf)
-		fmt.Printf("Disk Probes / Query:      %.2f (Exact 1 seek via Bloom Filter & Dense Index)\n", probesPerQuery)
+		fmt.Printf("Disk Probes / Query:      %.2f (Exact 1 seek via Bloom Filter & Dense proto.Index)\n", probesPerQuery)
 	})
 
 	// Benchmark 2: Point Read Misses (Cold Reads with Bloom Filter)
@@ -278,20 +279,20 @@ func TestBenchmarkReadAmplification(t *testing.T) {
 							continue
 						}
 						for _, e := range entries {
-							protoSize := int64(len(MustMarshal(e)))
+							protoSize := int64(len(proto.MustMarshal(e)))
 							entryDiskBytes := 8 + protoSize
 							totalDiskBytes += entryDiskBytes
 
-							if e.Command == Command_DELETE {
+							if e.Command == proto.Command_DELETE {
 								totalTombstoneBytes += entryDiskBytes
 							}
 						}
 
 						// Lookahead boundary entry: s.RangeScan reads 1 extra entry past endKey to detect loop termination!
-						lookaheadSize := int64(len(MustMarshal(&LSMEntry{
+						lookaheadSize := int64(len(proto.MustMarshal(&proto.LSMEntry{
 							Key:       endKey + "_z",
 							Value:     makeValue(valSize),
-							Command:   Command_PUT,
+							Command:   proto.Command_PUT,
 							Timestamp: time.Now().UnixNano(),
 						}))) + 8
 						totalLookaheadBytes += lookaheadSize

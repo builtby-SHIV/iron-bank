@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"bufio"
@@ -19,7 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/proto"
+	googleproto "google.golang.org/protobuf/proto"
+	"iron-bank/proto"
 )
 
 type WAL struct {
@@ -33,8 +34,8 @@ type WAL struct {
 	maxFileSize         int64
 	maxSegments         int64
 	currentSegmentIndex int64
-	VotedFor			int64
-	term				uint64
+	VotedFor            int64
+	term                uint64
 	ctx                 context.Context
 	cancel              context.CancelFunc
 }
@@ -99,8 +100,8 @@ func OpenWAL(directory string, enableFsync bool, maxFileSize int64, maxSegments 
 		maxFileSize:         maxFileSize,
 		maxSegments:         maxSegments,
 		currentSegmentIndex: lastSegmentID,
-		VotedFor: 			 -1,
-		term:				 1,
+		VotedFor:            -1,
+		term:                1,
 		ctx:                 ctx,
 		cancel:              cancel,
 	}
@@ -151,11 +152,11 @@ func calculateCRC(val []byte, seq uint64) uint32 {
 	return crc32.ChecksumIEEE(append(val, buf...))
 }
 
-func verifyCRC(entry *LogEntry) bool {
+func verifyCRC(entry *proto.LogEntry) bool {
 	return entry.CRC == calculateCRC(entry.GetValue(), entry.GetIndex())
 }
 
-func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
+func (w *WAL) WriteEntry(cmd proto.Command, key string, val []byte) error {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
@@ -165,7 +166,7 @@ func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
 
 	nextSeq := w.lastSequenceNo + 1
 
-	entry := &LogEntry{
+	entry := &proto.LogEntry{
 		Index:    nextSeq,
 		Term:     w.term,
 		VotedFor: w.VotedFor,
@@ -175,7 +176,7 @@ func (w *WAL) WriteEntry(cmd Command, key string, val []byte) error {
 		CRC:      calculateCRC(val, nextSeq),
 	}
 
-	data := MustMarshal(entry)
+	data := proto.MustMarshal(entry)
 
 	if err := binary.Write(w.bufWriter, binary.LittleEndian, int64(len(data))); err != nil {
 		return err
@@ -345,7 +346,7 @@ func (wal *WAL) getLastSequenceNo() (uint64, error) {
 	return 0, nil
 }
 
-func (wal *WAL) getLastEntryInFile(file *os.File) (*LogEntry, error) {
+func (wal *WAL) getLastEntryInFile(file *os.File) (*proto.LogEntry, error) {
 	var previousSize int64
 	var offset int64
 
@@ -384,7 +385,7 @@ func (wal *WAL) getLastEntryInFile(file *os.File) (*LogEntry, error) {
 	}
 }
 
-func (wal *WAL) getLastEntryInLog() (*LogEntry, error) {
+func (wal *WAL) getLastEntryInLog() (*proto.LogEntry, error) {
 	file, err := os.OpenFile(wal.currentSegment.Name(), os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -393,8 +394,8 @@ func (wal *WAL) getLastEntryInLog() (*LogEntry, error) {
 	return wal.getLastEntryInFile(file)
 }
 
-func (w *WAL) readAllEntries(file *os.File) ([]*LogEntry, error) {
-	var entries []*LogEntry
+func (w *WAL) readAllEntries(file *os.File) ([]*proto.LogEntry, error) {
+	var entries []*proto.LogEntry
 
 	var size int64
 	for {
@@ -422,9 +423,9 @@ func (w *WAL) readAllEntries(file *os.File) ([]*LogEntry, error) {
 	return entries, nil
 }
 
-func unmarshalAndVerify(data []byte) (*LogEntry, error) {
-	var entry LogEntry
-	if err := proto.Unmarshal(data, &entry); err != nil {
+func unmarshalAndVerify(data []byte) (*proto.LogEntry, error) {
+	var entry proto.LogEntry
+	if err := googleproto.Unmarshal(data, &entry); err != nil {
 		return nil, err
 	}
 
@@ -434,11 +435,11 @@ func unmarshalAndVerify(data []byte) (*LogEntry, error) {
 	return &entry, nil
 }
 
-func (w *WAL) ReadAll() ([]*LogEntry, error) {
+func (w *WAL) ReadAll() ([]*proto.LogEntry, error) {
 	return w.readAllFromOffset(-1)
 }
 
-func (w *WAL) readAllFromOffset(offset int) ([]*LogEntry, error) {
+func (w *WAL) readAllFromOffset(offset int) ([]*proto.LogEntry, error) {
 	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
 	if err != nil {
 		return nil, err
@@ -468,7 +469,7 @@ func (w *WAL) readAllFromOffset(offset int) ([]*LogEntry, error) {
 		return cmp.Compare(a.id, b.id)
 	})
 
-	var entries []*LogEntry
+	var entries []*proto.LogEntry
 
 	for _, seg := range segments {
 		file, err := os.OpenFile(seg.path, os.O_RDONLY, 0644)
@@ -523,7 +524,7 @@ func (wal *WAL) keepSyncing() {
 	}
 }
 
-func (wal *WAL) Repair() ([]*LogEntry, error) {
+func (wal *WAL) Repair() ([]*proto.LogEntry, error) {
 	wal.lock.Lock()
 	defer wal.lock.Unlock()
 
@@ -550,7 +551,7 @@ func (wal *WAL) Repair() ([]*LogEntry, error) {
 		return nil, err
 	}
 
-	var entries []*LogEntry
+	var entries []*proto.LogEntry
 	needsRepair := false
 
 	for {
@@ -569,8 +570,8 @@ func (wal *WAL) Repair() ([]*LogEntry, error) {
 			break
 		}
 
-		var entry LogEntry
-		if err := proto.Unmarshal(data, &entry); err != nil {
+		var entry proto.LogEntry
+		if err := googleproto.Unmarshal(data, &entry); err != nil {
 			needsRepair = true
 			break
 		}
@@ -593,7 +594,7 @@ func (wal *WAL) Repair() ([]*LogEntry, error) {
 	return entries, nil
 }
 
-func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*LogEntry) error {
+func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*proto.LogEntry) error {
 	tempFilePath := fmt.Sprintf("%s.tmp", targetFilePath)
 	tempFile, err := os.OpenFile(tempFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
@@ -601,7 +602,7 @@ func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*LogEntry)
 	}
 
 	for _, entry := range entries {
-		marshaledEntry := MustMarshal(entry)
+		marshaledEntry := proto.MustMarshal(entry)
 		size := int64(len(marshaledEntry))
 		if err := binary.Write(tempFile, binary.LittleEndian, size); err != nil {
 			_ = tempFile.Close()

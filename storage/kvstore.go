@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 
 type KVStore struct {
 	data map[string]string
-	mu sync.RWMutex
+	mu   sync.RWMutex
 }
 
 type NotFoundError struct {
@@ -15,12 +15,12 @@ type NotFoundError struct {
 }
 
 func (e *NotFoundError) Error() string {
-	return  fmt.Sprintf("key %s not found", e.key)
+	return fmt.Sprintf("key %s not found", e.key)
 }
 
 func NewKVStore() *KVStore {
 	return &KVStore{
-		data : make(map[string]string),
+		data: make(map[string]string),
 	}
 }
 
@@ -35,7 +35,7 @@ func (kv *KVStore) Get(k string) (string, error) {
 	defer kv.mu.RUnlock()
 	v, ok := kv.data[k]
 	if !ok {
-		return "", &NotFoundError{ key: k }
+		return "", &NotFoundError{key: k}
 	}
 	return v, nil
 }

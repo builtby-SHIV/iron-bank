@@ -15,6 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"iron-bank/cluster"
+	"iron-bank/storage"
 )
 
 type Response struct {
@@ -31,16 +34,16 @@ type NonAddRequest struct {
 }
 
 type Server struct {
-	lsm          *LSMTree
-	term 		 uint64
+	lsm          *storage.LSMTree
+	term         uint64
 	votedFor     int64
 	prevLogIndex uint64
 }
 
 type ServerConfig struct {
 	NodeID   uint64
-	HTTPAddr string 
-	TCPAddr  string 
+	HTTPAddr string
+	TCPAddr  string
 	DataDir  string
 	Role     string
 	Peers    string
@@ -63,7 +66,7 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	var req NonAddRequest
-	var nf *NotFoundError
+	var nf *storage.NotFoundError
 	if key := r.URL.Query().Get("key"); key != "" {
 		req.Key = key
 	} else if r.Body != nil {
@@ -167,11 +170,11 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag s
 	if strings.TrimSpace(roleFlag) == "" {
 		return nil, errors.New("--role is required")
 	}
-	role, err := ParseRole(roleFlag)
+	role, err := cluster.ParseRole(roleFlag)
 	if err != nil {
 		return nil, fmt.Errorf("invalid --role=%q: %w", roleFlag, err)
 	}
-	if role == RoleUnknown {
+	if role == cluster.RoleUnknown {
 		return nil, fmt.Errorf("invalid --role=%q: must be one of leader, follower, observer", roleFlag)
 	}
 
@@ -194,7 +197,6 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag s
 		Peers:    peers,
 	}, nil
 }
-
 
 // parsePeersList returns a list of target peer TCP addresses, excluding selfTCP.
 func parsePeersList(raw string, selfTCP string) []string {
@@ -224,12 +226,12 @@ func parsePeersList(raw string, selfTCP string) []string {
 }
 
 func main() {
-	idFlag      := flag.String("id",    "", "Node identifier (required, uint64)")
-	httpFlag    := flag.String("http",  "", "HTTP listen address (required)")
-	tcpFlag     := flag.String("tcp",   "", "TCP listen address (required)")
-	roleFlag    := flag.String("role",  "", "Node role: leader | follower | observer (required)")
-	dataDirFlag := flag.String("data",  "", "Storage directory (required)")
-	peersFlag   := flag.String("peers", "", "List of peer TCP addresses (required)")
+	idFlag := flag.String("id", "", "Node identifier (required, uint64)")
+	httpFlag := flag.String("http", "", "HTTP listen address (required)")
+	tcpFlag := flag.String("tcp", "", "TCP listen address (required)")
+	roleFlag := flag.String("role", "", "Node role: leader | follower | observer (required)")
+	dataDirFlag := flag.String("data", "", "Storage directory (required)")
+	peersFlag := flag.String("peers", "", "List of peer TCP addresses (required)")
 	flag.Parse()
 
 	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag, *peersFlag)
@@ -241,7 +243,7 @@ func main() {
 		log.Fatalf("[startup] create data dir %s: %v", cfg.DataDir, err)
 	}
 
-	ns := &NodeState{
+	ns := &cluster.NodeState{
 		ID:       cfg.NodeID,
 		HTTPAddr: cfg.HTTPAddr,
 		TCPAddr:  cfg.TCPAddr,
@@ -252,7 +254,7 @@ func main() {
 	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  data=%s",
 		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, cfg.DataDir)
 
-	lsm, err := Open(cfg.DataDir, 4096, true)
+	lsm, err := storage.Open(cfg.DataDir, 4096, true)
 	if err != nil {
 		log.Fatalf("[startup] open LSM at %s: %v", cfg.DataDir, err)
 	}
@@ -265,7 +267,7 @@ func main() {
 	defer tcpLn.Close()
 	log.Printf("[tcp] listening on %s", snap.TCPAddr)
 
-	entry, err := lsm.wal.getLastEntryInLog()
+	entry, err := lsm.LastLogEntry()
 	if err != nil {
 		//handle this later on
 	}
@@ -274,8 +276,8 @@ func main() {
 		snap = ns.Snapshot()
 	}
 
-	peerMap := NewPeerMap()
-	selfInfo := PeerInfo{
+	peerMap := cluster.NewPeerMap()
+	selfInfo := cluster.PeerInfo{
 		ID:       snap.ID,
 		HTTPAddr: snap.HTTPAddr,
 		TCPAddr:  snap.TCPAddr,
@@ -302,18 +304,18 @@ func main() {
 	var httpServer *http.Server
 
 	if snap.HTTPAddr != "" {
-		srv := &Server{ 
-			lsm:          lsm, 
-			term:         snap.Term,
-			votedFor:     snap.VotedFor,
+		srv := &Server{
+			lsm:      lsm,
+			term:     snap.Term,
+			votedFor: snap.VotedFor,
 		}
 		if entry != nil {
 			srv.prevLogIndex = entry.Index
 		}
 		mux := http.NewServeMux()
 
-		mux.HandleFunc("POST /put",   srv.add)
-		mux.HandleFunc("GET /get",    srv.get)
+		mux.HandleFunc("POST /put", srv.add)
+		mux.HandleFunc("GET /get", srv.get)
 		mux.HandleFunc("DELETE /del", srv.delete)
 
 		// Node introspection
@@ -343,7 +345,7 @@ func main() {
 		log.Printf("[http] listening on %s", snap.HTTPAddr)
 	}
 
-	<- ctx.Done()
+	<-ctx.Done()
 
 	log.Println("[node] shutting down…")
 	if httpServer != nil {

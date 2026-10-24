@@ -69,9 +69,13 @@ func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 			ns := &NodeState{
 				statePath: statePath,
 				RaftState: &proto.RaftState{
-					Term: 0, 
+					Term:    0,
 					VoteFor: -1,
+					Log: [] *proto.LogEntry{},
 				},
+			}
+			if err := ns.Save(); err != nil {
+				return nil, fmt.Errorf("creating %s: %w", statePath, err)
 			}
 			return ns, nil
 		}
@@ -99,12 +103,14 @@ func (ns *NodeState) Save() error {
 		ns.RaftState = &proto.RaftState{
 			Term:    0,
 			VoteFor: -1,
+			Log: [] *proto.LogEntry{},
 		}
 	}
 
 	payload := &proto.RaftState{
 		Term:    ns.RaftState.Term,
 		VoteFor: ns.RaftState.VoteFor,
+		Log: 	 ns.RaftState.Log,
 	}
 
 	data := proto.MustMarshal(payload)
@@ -179,6 +185,15 @@ func (ns *NodeState) VoteFor() int64 {
 		return ns.RaftState.VoteFor
 	}
 	return -1
+}
+
+func (ns *NodeState) Log() [] *proto.LogEntry{} {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	if ns.RaftState != nil {
+		return ns.RaftState.Log
+	}
+	return []
 }
 
 func (ns *NodeState) Snapshot() NodeState {

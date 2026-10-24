@@ -393,7 +393,7 @@ func listenAndReplyToLeader(self *NodeState) {
 				Success:       true,
 			}
 		} else {
-			self.Modify(RoleFollower, &proto.RaftState{Term: data.Term, VoteFor: -1})
+			self.Modify(RoleFollower, &proto.RaftState{ Term: data.Term, VoteFor: -1 })
 		}
 
 		replyPayload := proto.MustMarshal(reply)

@@ -289,10 +289,11 @@ func (x *LSMEntry) GetTimestamp() int64 {
 type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
-	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
-	Value         []byte                 `protobuf:"bytes,5,opt,name=value,proto3,oneof" json:"value,omitempty"`
-	CRC           uint32                 `protobuf:"varint,6,opt,name=CRC,proto3" json:"CRC,omitempty"`
-	Command       Command                `protobuf:"varint,7,opt,name=command,proto3,enum=proto.Command" json:"command,omitempty"`
+	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,4,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	CRC           uint32                 `protobuf:"varint,5,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Command       Command                `protobuf:"varint,6,opt,name=command,proto3,enum=proto.Command" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -330,6 +331,13 @@ func (*LogEntry) Descriptor() ([]byte, []int) {
 func (x *LogEntry) GetIndex() uint64 {
 	if x != nil {
 		return x.Index
+	}
+	return 0
+}
+
+func (x *LogEntry) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
 	}
 	return 0
 }
@@ -518,6 +526,7 @@ type RaftState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
 	VoteFor       int64                  `protobuf:"varint,2,opt,name=VoteFor,proto3" json:"VoteFor,omitempty"`
+	Log           []*LogEntry            `protobuf:"bytes,6,rep,name=Log,proto3" json:"Log,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -566,6 +575,13 @@ func (x *RaftState) GetVoteFor() int64 {
 	return 0
 }
 
+func (x *RaftState) GetLog() []*LogEntry {
+	if x != nil {
+		return x.Log
+	}
+	return nil
+}
+
 var File_serialization_proto protoreflect.FileDescriptor
 
 const file_serialization_proto_rawDesc = "" +
@@ -585,13 +601,14 @@ const file_serialization_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\x0e2\x0e.proto.CommandR\acommand\x12\x19\n" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x03R\ttimestampB\b\n" +
-	"\x06_value\"\x93\x01\n" +
+	"\x06_value\"\xa7\x01\n" +
 	"\bLogEntry\x12\x14\n" +
-	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\x12\x19\n" +
-	"\x05value\x18\x05 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
-	"\x03CRC\x18\x06 \x01(\rR\x03CRC\x12(\n" +
-	"\acommand\x18\a \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
+	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x12\n" +
+	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x04 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
+	"\x03CRC\x18\x05 \x01(\rR\x03CRC\x12(\n" +
+	"\acommand\x18\x06 \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
 	"\x06_value\"\xd8\x01\n" +
 	"\x11AppendEntriesArgs\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x1a\n" +
@@ -604,10 +621,11 @@ const file_serialization_proto_rawDesc = "" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12$\n" +
 	"\rConflictIndex\x18\x02 \x01(\x04R\rConflictIndex\x12\"\n" +
 	"\fConflictTerm\x18\x03 \x01(\x04R\fConflictTerm\x12\x18\n" +
-	"\aSuccess\x18\x04 \x01(\bR\aSuccess\"9\n" +
+	"\aSuccess\x18\x04 \x01(\bR\aSuccess\"\\\n" +
 	"\tRaftState\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x18\n" +
-	"\aVoteFor\x18\x02 \x01(\x03R\aVoteFor*-\n" +
+	"\aVoteFor\x18\x02 \x01(\x03R\aVoteFor\x12!\n" +
+	"\x03Log\x18\x06 \x03(\v2\x0f.proto.LogEntryR\x03Log*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
@@ -644,11 +662,12 @@ var file_serialization_proto_depIdxs = []int32{
 	0, // 1: proto.LSMEntry.command:type_name -> proto.Command
 	0, // 2: proto.LogEntry.command:type_name -> proto.Command
 	5, // 3: proto.AppendEntriesArgs.Entries:type_name -> proto.LogEntry
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 4: proto.RaftState.Log:type_name -> proto.LogEntry
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_serialization_proto_init() }

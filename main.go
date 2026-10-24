@@ -21,16 +21,16 @@ import (
 )
 
 type Response struct {
-	Message string `json:"message"`
+	Message string 
 }
 
 type AddRequest struct {
-	Key string `json:"key"`
-	Val string `json:"val"`
+	Key string 
+	Val string 
 }
 
 type NonAddRequest struct {
-	Key string `json:"key"`
+	Key string 
 }
 
 type Server struct {

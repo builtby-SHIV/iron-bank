@@ -187,13 +187,18 @@ func TestNodeStateBinaryPersistence(t *testing.T) {
 		t.Fatalf("expected initial term=0, voteFor=-1, got %+v", &snap)
 	}
 
+	// Verify file is created initially when it doesn't exist
+	binPath := filepath.Join(dir, "raft_state.bin")
+	if fi, err := os.Stat(binPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("raft_state.bin not created on init or empty: %v", err)
+	}
+
 	// Update and atomically persist
 	ns.Modify(cluster.RoleLeader, &proto.RaftState{Term: 7, VoteFor: 3})
 
-	// Verify file was written
-	binPath := filepath.Join(dir, "raft_state.bin")
+	// Verify file was updated
 	if fi, err := os.Stat(binPath); err != nil || fi.Size() == 0 {
-		t.Fatalf("raft_state.bin not created or empty: %v", err)
+		t.Fatalf("raft_state.bin missing or empty after modify: %v", err)
 	}
 
 	// Reopen on node restart

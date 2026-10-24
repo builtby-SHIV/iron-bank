@@ -3,7 +3,6 @@ package storage
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"iron-bank/proto"
 	"os"
@@ -27,7 +26,6 @@ var maxSSTables = map[int]int{
 
 const (
 	SSTableFilePrefix  = "sstable_"
-	WALDirectorySuffix = "_wal"
 	maxLevel           = 7
 )
 
@@ -45,7 +43,6 @@ type LSMTree struct {
 	mu                   sync.RWMutex
 	maxMemtableSize      int64
 	directory            string
-	wal                  *WAL
 	inRecovery           bool
 	levels               []*level
 	current_sst_sequence uint64
@@ -60,25 +57,18 @@ type LSMTree struct {
 	closed               bool
 }
 
-func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, error) {
+func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	wal, err := OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
+	
 	levels := make([]*level, maxLevel)
 	for i := 0; i < maxLevel; i++ {
-		levels[i] = &level{ssTables: make([]*SSTable, 0)}
+		levels[i] = &level{ ssTables: make([]*SSTable, 0) }
 	}
 
 	lsm := &LSMTree{
 		memtable:             NewMemTable(),
 		maxMemtableSize:      maxMemtableSize,
 		directory:            dir,
-		wal:                  wal,
 		inRecovery:           false,
 		current_sst_sequence: 0,
 		levels:               levels,
@@ -90,7 +80,7 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 	}
 
 	if err := lsm.loadSSTables(); err != nil {
-		_ = wal.Close()
+		// _ = wal.Close()
 		cancel()
 		return nil, err
 	}
@@ -101,12 +91,12 @@ func Open(dir string, maxMemtableSize int64, recoverFromWAL bool) (*LSMTree, err
 	lsm.flushingWg.Add(1)
 	go lsm.backgroundMemTableflushing()
 
-	if recoverFromWAL {
-		if err := lsm.recoverFromWAL(); err != nil {
-			_ = lsm.Close()
-			return nil, err
-		}
-	}
+	// if recoverFromWAL {
+	// 	if err := lsm.recoverFromWAL(); err != nil {
+	// 		_ = lsm.Close()
+	// 		return nil, err
+	// 	}
+	// }
 
 	return lsm, nil
 }
@@ -135,9 +125,9 @@ func (l *LSMTree) Close() error {
 	l.cancel()
 	l.compactionWg.Wait()
 
-	if l.wal != nil {
-		_ = l.wal.Close()
-	}
+	// if l.wal != nil {
+	// 	_ = l.wal.Close()
+	// }
 
 	for _, lvl := range l.levels {
 		lvl.mu.Lock()
@@ -152,9 +142,9 @@ func (l *LSMTree) Close() error {
 	return nil
 }
 
-func (l *LSMTree) LastLogEntry() (*proto.LogEntry, error) {
-	return l.wal.getLastEntryInLog()
-}
+// func (l *LSMTree) LastLogEntry() (*proto.LogEntry, error) {
+// 	return l.wal.getLastEntryInLog()
+// }
 
 func (l *LSMTree) backgroundCompaction() {
 	defer l.compactionWg.Done()
@@ -340,11 +330,11 @@ func (l *LSMTree) PUT(key string, val []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if !l.inRecovery {
-		if err := l.wal.WriteEntry(proto.Command_PUT, key, val); err != nil {
-			return err
-		}
-	}
+	// if !l.inRecovery {
+	// 	if err := l.wal.WriteEntry(proto.Command_PUT, key, val); err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	l.memtable.Put(key, val)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
@@ -413,11 +403,11 @@ func (l *LSMTree) DELETE(key string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if !l.inRecovery {
-		if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil); err != nil {
-			return err
-		}
-	}
+	// if !l.inRecovery {
+	// 	if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil); err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	l.memtable.Del(key)
 	if l.memtable.SizeInbytes() > l.maxMemtableSize {
@@ -609,46 +599,46 @@ func (l *LSMTree) initializeCurrentSequenceNumber() error {
 	return nil
 }
 
-func (l *LSMTree) recoverFromWAL() error {
-	l.inRecovery = true
-	defer func() {
-		l.inRecovery = false
-	}()
-	entries, err := l.readEntriesFromWAL()
-	if err != nil {
-		return err
-	}
+// func (l *LSMTree) recoverFromWAL() error {
+// 	l.inRecovery = true
+// 	defer func() {
+// 		l.inRecovery = false
+// 	}()
+// 	entries, err := l.readEntriesFromWAL()
+// 	if err != nil {
+// 		return err
+// 	}
 
-	for _, entry := range entries {
-		if err := l.processWALEntry(entry); err != nil {
-			return err
-		}
-	}
+// 	for _, entry := range entries {
+// 		if err := l.processWALEntry(entry); err != nil {
+// 			return err
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
-func (l *LSMTree) readEntriesFromWAL() ([]*proto.LogEntry, error) {
-	entries, err := l.wal.ReadAll()
-	if err != nil {
-		repairedEntries, repErr := l.wal.Repair()
-		if repErr != nil {
-			return nil, repErr
-		}
-		return repairedEntries, nil
-	}
-	return entries, nil
-}
+// func (l *LSMTree) readEntriesFromWAL() ([]*proto.LogEntry, error) {
+// 	entries, err := l.wal.ReadAll()
+// 	if err != nil {
+// 		repairedEntries, repErr := l.wal.Repair()
+// 		if repErr != nil {
+// 			return nil, repErr
+// 		}
+// 		return repairedEntries, nil
+// 	}
+// 	return entries, nil
+// }
 
-func (l *LSMTree) processWALEntry(entry *proto.LogEntry) error {
-	switch entry.Command {
-	case proto.Command_PUT:
-		return l.PUT(entry.Key, entry.Value)
-	case proto.Command_DELETE:
-		return l.DELETE(entry.Key)
-	case proto.Command_WRITE_SST:
-		return errors.New("unexpected write sst command in WAL")
-	default:
-		return errors.New("unknown command in WAL")
-	}
-}
+// func (l *LSMTree) processWALEntry(entry *proto.LogEntry) error {
+// 	switch entry.Command {
+// 	case proto.Command_PUT:
+// 		return l.PUT(entry.Key, entry.Value)
+// 	case proto.Command_DELETE:
+// 		return l.DELETE(entry.Key)
+// 	case proto.Command_WRITE_SST:
+// 		return errors.New("unexpected write sst command in WAL")
+// 	default:
+// 		return errors.New("unknown command in WAL")
+// 	}
+// }

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"iron-bank/proto"
+	"iron-bank/storage"
 )
 
 const (
@@ -17,6 +18,7 @@ const (
 	RoleObserver  = "observer"
 	RoleUnknown   = "unknown"
 	nodeStateFile = "raft_state.bin"
+	WALDirectorySuffix = "_wal"
 )
 
 type NodeState struct {
@@ -26,6 +28,7 @@ type NodeState struct {
 	Role      string
 	statePath string
 	RaftState *proto.RaftState
+	WAL       *storage.WAL
 	mu        sync.RWMutex
 }
 
@@ -44,7 +47,15 @@ func ParseRole(s string) (string, error) {
 	}
 }
 
-func NewNodeState(id uint64, httpAddr, tcpAddr, role string, raftState *proto.RaftState) *NodeState {
+func NewNodeState(id uint64, httpAddr, tcpAddr, role, dir string, raftState *proto.RaftState) *NodeState {
+	// ctx, cancel := context.WithCancel(context.Background())
+
+	wal, err := storage.OpenWAL(dir + WALDirectorySuffix, true, 128000, 1000)
+	if err != nil {
+		// cancel()
+		return nil
+	}
+	
 	if raftState == nil {
 		raftState = &proto.RaftState{
 			Term: 0, 
@@ -57,10 +68,19 @@ func NewNodeState(id uint64, httpAddr, tcpAddr, role string, raftState *proto.Ra
 		TCPAddr:   tcpAddr,
 		Role:      role,
 		RaftState: raftState,
+		WAL: 	   wal,
 	}
 }
 
 func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
+	// _, cancel := context.WithCancel(context.Background())
+
+	wal, err := storage.OpenWAL(dataDir + WALDirectorySuffix, true, 128000, 1000)
+	if err != nil {
+		// cancel()
+		return nil, err
+	}
+	
 	statePath := filepath.Join(dataDir, nodeStateFile)
 
 	data, err := os.ReadFile(statePath)
@@ -73,6 +93,7 @@ func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 					VoteFor: -1,
 					Log: [] *proto.LogEntry{},
 				},
+				WAL: wal,
 			}
 			if err := ns.Save(); err != nil {
 				return nil, fmt.Errorf("creating %s: %w", statePath, err)
@@ -187,13 +208,13 @@ func (ns *NodeState) VoteFor() int64 {
 	return -1
 }
 
-func (ns *NodeState) Log() [] *proto.LogEntry{} {
+func (ns *NodeState) Log() [] *proto.LogEntry {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 	if ns.RaftState != nil {
 		return ns.RaftState.Log
 	}
-	return []
+	return [] *proto.LogEntry{}
 }
 
 func (ns *NodeState) Snapshot() NodeState {

@@ -379,7 +379,7 @@ func (wal *WAL) getLastEntryInFile(file *os.File) (*proto.LogEntry, error) {
 	}
 }
 
-func (wal *WAL) getLastEntryInLog() (*proto.LogEntry, error) {
+func (wal *WAL) GetLastEntryInLog() (*proto.LogEntry, error) {
 	file, err := os.OpenFile(wal.currentSegment.Name(), os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -388,7 +388,7 @@ func (wal *WAL) getLastEntryInLog() (*proto.LogEntry, error) {
 	return wal.getLastEntryInFile(file)
 }
 
-func (w *WAL) readAllEntries(file *os.File) ([]*proto.LogEntry, error) {
+func (w *WAL) ReadAllEntries(file *os.File) ([]*proto.LogEntry, error) {
 	var entries []*proto.LogEntry
 
 	var size int64

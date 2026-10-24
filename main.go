@@ -255,7 +255,7 @@ func main() {
 	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  term=%d  votedFor=%d  data=%s",
 		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, snap.RaftState.Term, snap.RaftState.VoteFor, cfg.DataDir)
 
-	lsm, err := storage.Open(cfg.DataDir, 4096, true)
+	lsm, err := storage.Open(cfg.DataDir, 4096)
 	if err != nil {
 		log.Fatalf("[startup] open LSM at %s: %v", cfg.DataDir, err)
 	}
@@ -268,7 +268,7 @@ func main() {
 	defer tcpLn.Close()
 	log.Printf("[tcp] listening on %s", snap.TCPAddr)
 
-	entry, err := lsm.LastLogEntry()
+	entry, err := ns.WAL.GetLastEntryInLog()
 	if err != nil {
 		//handle this later on
 	}

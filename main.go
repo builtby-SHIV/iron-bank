@@ -213,6 +213,8 @@ func parsePeersList(raw string, selfTCP string) []string {
 				}
 			}
 		}
+	} else {
+		candidates = []string{":7001", ":7002", ":7003"}
 	}
 
 	normSelf, _, _ := normalizeAddr(selfTCP)
@@ -243,16 +245,15 @@ func main() {
 		log.Fatalf("[startup] create data dir %s: %v", cfg.DataDir, err)
 	}
 
-	ns := &cluster.NodeState{
-		ID:       cfg.NodeID,
-		HTTPAddr: cfg.HTTPAddr,
-		TCPAddr:  cfg.TCPAddr,
-		Role:     cfg.Role,
+	ns, err := cluster.LoadOrInitNodeState(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("[startup] load node state: %v", err)
 	}
+	ns.MergeFlags(cfg.NodeID, cfg.HTTPAddr, cfg.TCPAddr, cfg.Role)
 
 	snap := ns.Snapshot()
-	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  data=%s",
-		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, cfg.DataDir)
+	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  term=%d  votedFor=%d  data=%s",
+		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, snap.RaftState.Term, snap.RaftState.VoteFor, cfg.DataDir)
 
 	lsm, err := storage.Open(cfg.DataDir, 4096, true)
 	if err != nil {
@@ -270,10 +271,6 @@ func main() {
 	entry, err := lsm.LastLogEntry()
 	if err != nil {
 		//handle this later on
-	}
-	if entry != nil {
-		ns.Modify(entry.Term, entry.VotedFor)
-		snap = ns.Snapshot()
 	}
 
 	peerMap := cluster.NewPeerMap()
@@ -306,8 +303,8 @@ func main() {
 	if snap.HTTPAddr != "" {
 		srv := &Server{
 			lsm:      lsm,
-			term:     snap.Term,
-			votedFor: snap.VotedFor,
+			term:     snap.RaftState.Term,
+			votedFor: snap.RaftState.VoteFor,
 		}
 		if entry != nil {
 			srv.prevLogIndex = entry.Index

@@ -18,19 +18,19 @@ import (
 type MessageType string
 
 type ClusterMessage struct {
-	Type     MessageType `json:"type"`
-	SenderID uint64      `json:"sender_id"`
-	HTTPAddr string      `json:"http_addr"`
-	TCPAddr  string      `json:"tcp_addr"`
-	Role     string      `json:"role"`
+	Type     MessageType 
+	SenderID uint64      
+	HTTPAddr string      
+	TCPAddr  string      
+	Role     string      
 }
 
 type PeerInfo struct {
-	ID       uint64    `json:"id"`
-	HTTPAddr string    `json:"http_addr"`
-	TCPAddr  string    `json:"tcp_addr"`
-	Role     string    `json:"role"`
-	LastSeen time.Time `json:"last_seen,omitempty"`
+	ID       uint64    
+	HTTPAddr string    
+	TCPAddr  string    
+	Role     string    
+	LastSeen time.Time 
 }
 
 type PeerMap struct {
@@ -306,7 +306,7 @@ func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArg
 
 		case t := <-ticker.C:
 			emptyPayload := &proto.AppendEntriesArgs{
-				Term:         self.Term,
+				Term:         self.Term(),
 				LeaderID:     self.ID,
 				PrevLogIndex: PrevLogIndex,
 				PrevLogTerm:  PrevLogTerm,
@@ -376,25 +376,24 @@ func listenAndReplyToLeader(self *NodeState) {
 		proto.MustUnmarshal(payload, data)
 		var reply *proto.AppendEntriesReply
 
-		if data.Term < self.Term {
+		if data.Term < self.Term() {
 			reply = &proto.AppendEntriesReply{
-				Term:          self.Term,
+				Term:          self.Term(),
 				ConflictIndex: 0,
 				ConflictTerm:  0,
 				Success:       false,
 			}
 
-		} else if data.Term == self.Term {
+		} else if data.Term == self.Term() {
 			// check what is to be done of the entries and act accordingly
-			if data.
 			reply = &proto.AppendEntriesReply{
-				Term:          self.Term,
+				Term:          self.Term(),
 				ConflictIndex: 0,
 				ConflictTerm:  0,
 				Success:       true,
 			}
 		} else {
-			self.Modify(RoleFollower, data.Term, -1)
+			self.Modify(RoleFollower, &proto.RaftState{Term: data.Term, VoteFor: -1})
 		}
 
 		replyPayload := proto.MustMarshal(reply)

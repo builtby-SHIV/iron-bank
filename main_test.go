@@ -8,12 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"iron-bank/cluster"
+	"iron-bank/proto"
 	"iron-bank/storage"
 )
 
@@ -160,17 +162,48 @@ func TestResolveConfig(t *testing.T) {
 
 // ── NodeState ─────────────────────────────────────────────────────────────────
 
-func TestNodeStateModifyNodeState(t *testing.T) {
-	ns := cluster.NewNodeState(1, ":8001", ":7001", cluster.RoleFollower, 0, -1)
+func TestNodeStateModify(t *testing.T) {
+	ns := cluster.NewNodeState(1, ":8001", ":7001", cluster.RoleFollower, &proto.RaftState{Term: 0, VoteFor: -1})
 	snap := ns.Snapshot()
-	if snap.ID != 1 || snap.Role != cluster.RoleFollower || snap.Term != 0 || snap.VotedFor != -1 {
-		t.Fatalf("unexpected initial snapshot: %+v", snap)
+	if snap.ID != 1 || snap.Role != cluster.RoleFollower || snap.RaftState.Term != 0 || snap.RaftState.VoteFor != -1 {
+		t.Fatalf("unexpected initial snapshot: %+v", &snap)
 	}
 
-	ns.ModifyNodeState(3, 2)
+	ns.Modify(cluster.RoleFollower, &proto.RaftState{Term: 3, VoteFor: 2})
 	snap = ns.Snapshot()
-	if snap.Term != 3 || snap.VotedFor != 2 {
-		t.Errorf("expected term=3, votedFor=2, got %+v", snap)
+	if snap.RaftState.Term != 3 || snap.RaftState.VoteFor != 2 {
+		t.Errorf("expected term=3, votedFor=2, got %+v", &snap)
+	}
+}
+
+func TestNodeStateBinaryPersistence(t *testing.T) {
+	dir := t.TempDir()
+
+	ns, err := cluster.LoadOrInitNodeState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap := ns.Snapshot(); snap.RaftState.Term != 0 || snap.RaftState.VoteFor != -1 {
+		t.Fatalf("expected initial term=0, voteFor=-1, got %+v", &snap)
+	}
+
+	// Update and atomically persist
+	ns.Modify(cluster.RoleLeader, &proto.RaftState{Term: 7, VoteFor: 3})
+
+	// Verify file was written
+	binPath := filepath.Join(dir, "raft_state.bin")
+	if fi, err := os.Stat(binPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("raft_state.bin not created or empty: %v", err)
+	}
+
+	// Reopen on node restart
+	ns2, err := cluster.LoadOrInitNodeState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2 := ns2.Snapshot()
+	if snap2.RaftState.Term != 7 || snap2.RaftState.VoteFor != 3 {
+		t.Errorf("recovered state mismatch: expected term=7, votedFor=3, got term=%d, votedFor=%d", snap2.RaftState.Term, snap2.RaftState.VoteFor)
 	}
 }
 
@@ -184,7 +217,7 @@ func TestNodeStateMergeFlags(t *testing.T) {
 		t.Errorf("expected role=%q, got %q", cluster.RoleLeader, snap.Role)
 	}
 	if snap.ID != 1 || snap.HTTPAddr != ":8001" || snap.TCPAddr != ":7001" {
-		t.Errorf("fields should be preserved: %+v", snap)
+		t.Errorf("fields should be preserved: %+v", &snap)
 	}
 }
 

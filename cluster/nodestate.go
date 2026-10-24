@@ -1,17 +1,22 @@
 package cluster
 
 import (
+	"errors"
 	"fmt"
-	"iron-bank/proto"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+
+	"iron-bank/proto"
 )
 
 const (
-	RoleLeader   = "leader"
-	RoleFollower = "follower"
-	RoleObserver = "observer"
-	RoleUnknown  = "unknown"
+	RoleLeader    = "leader"
+	RoleFollower  = "follower"
+	RoleObserver  = "observer"
+	RoleUnknown   = "unknown"
+	nodeStateFile = "raft_state.bin"
 )
 
 type NodeState struct {
@@ -20,7 +25,7 @@ type NodeState struct {
 	TCPAddr   string
 	Role      string
 	statePath string
-	raftState *proto.RaftState
+	RaftState *proto.RaftState
 	mu        sync.RWMutex
 }
 
@@ -40,13 +45,84 @@ func ParseRole(s string) (string, error) {
 }
 
 func NewNodeState(id uint64, httpAddr, tcpAddr, role string, raftState *proto.RaftState) *NodeState {
+	if raftState == nil {
+		raftState = &proto.RaftState{
+			Term: 0, 
+			VoteFor: -1,
+		}
+	}
 	return &NodeState{
 		ID:        id,
 		HTTPAddr:  httpAddr,
 		TCPAddr:   tcpAddr,
 		Role:      role,
-		raftState: raftState,
+		RaftState: raftState,
 	}
+}
+
+func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
+	statePath := filepath.Join(dataDir, nodeStateFile)
+
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			ns := &NodeState{
+				statePath: statePath,
+				RaftState: &proto.RaftState{
+					Term: 0, 
+					VoteFor: -1,
+				},
+			}
+			return ns, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", statePath, err)
+	}
+
+	var rs proto.RaftState
+	proto.MustUnmarshal(data, &rs)
+
+	return &NodeState{
+		statePath: statePath,
+		RaftState: &rs,
+	}, nil
+}
+
+func (ns *NodeState) Save() error {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	if ns.statePath == "" {
+		return nil
+	}
+
+	if ns.RaftState == nil {
+		ns.RaftState = &proto.RaftState{
+			Term:    0,
+			VoteFor: -1,
+		}
+	}
+
+	payload := &proto.RaftState{
+		Term:    ns.RaftState.Term,
+		VoteFor: ns.RaftState.VoteFor,
+	}
+
+	data := proto.MustMarshal(payload)
+
+	dir := filepath.Dir(ns.statePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+
+	tmp := ns.statePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("writing node state: %w", err)
+	}
+	if err := os.Rename(tmp, ns.statePath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("committing node state: %w", err)
+	}
+	return nil
 }
 
 func (ns *NodeState) MergeFlags(id uint64, httpAddr, tcpAddr string, role string) {
@@ -71,13 +147,13 @@ func (ns *NodeState) MergeFlags(id uint64, httpAddr, tcpAddr string, role string
 
 func (ns *NodeState) Modify(role string, newRaftState *proto.RaftState) {
 	ns.mu.Lock()
-	defer ns.mu.Unlock()
 	if role != "" {
 		ns.Role = role
 	}
-	ns.raftState = newRaftState
+	ns.RaftState = newRaftState
+	ns.mu.Unlock()
 
-	//persist the data into another separate file and every write should overwrite the previous data
+	_ = ns.Save()
 }
 
 func (ns *NodeState) UpdateRole(role string) error {
@@ -87,19 +163,45 @@ func (ns *NodeState) UpdateRole(role string) error {
 	return nil
 }
 
+func (ns *NodeState) Term() uint64 {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	if ns.RaftState != nil {
+		return ns.RaftState.Term
+	}
+	return 0
+}
+
+func (ns *NodeState) VoteFor() int64 {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	if ns.RaftState != nil {
+		return ns.RaftState.VoteFor
+	}
+	return -1
+}
+
 func (ns *NodeState) Snapshot() NodeState {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
+	var rs *proto.RaftState
+	if ns.RaftState != nil {
+		rs = &proto.RaftState{
+			Term:    ns.RaftState.Term,
+			VoteFor: ns.RaftState.VoteFor,
+		}
+	} else {
+		rs = &proto.RaftState{
+			Term:    0,
+			VoteFor: -1,
+		}
+	}
 	return NodeState{
-		ID:       ns.ID,
-		HTTPAddr: ns.HTTPAddr,
-		TCPAddr:  ns.TCPAddr,
-		Role:     ns.Role,
-		raftState: ns.raftState,
+		ID:        ns.ID,
+		HTTPAddr:  ns.HTTPAddr,
+		TCPAddr:   ns.TCPAddr,
+		Role:      ns.Role,
+		statePath: ns.statePath,
+		RaftState: rs,
 	}
 }
-
-func (ns *NodeState) Save() error {
-	return nil
-}
-

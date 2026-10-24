@@ -383,14 +383,43 @@ func listenAndReplyToLeader(self *NodeState) {
 				ConflictTerm:  0,
 				Success:       false,
 			}
-
 		} else if data.Term == self.Term() {
 			// check what is to be done of the entries and act accordingly
-			reply = &proto.AppendEntriesReply{
-				Term:          self.Term(),
-				ConflictIndex: 0,
-				ConflictTerm:  0,
-				Success:       true,
+			entry, err := self.WAL.GetLastEntryInLog()
+			if data.PrevLogIndex == entry.Index {
+				if data.PrevLogTerm == entry.Term {
+					self.mu.RLock()
+					defer self.mu.RUnlock()
+		
+					if err != nil {
+						//handle this later on
+					}
+						for _, entries := range data.Entries {
+							self.RaftState.Log = append(self.RaftState.Log, entries)
+						}
+						
+						reply = &proto.AppendEntriesReply{
+							Term:          self.Term(),
+							ConflictIndex: 0,
+							ConflictTerm:  0,
+							Success:       true,
+						}
+				}
+			} else if  data.PrevLogIndex > entry.Index {
+				reply = &proto.AppendEntriesReply{
+					Term:          self.Term(),
+					ConflictIndex: entry.Index,
+					ConflictTerm:  0,
+					Success:       false,
+				}
+			} else {
+				reply = &proto.AppendEntriesReply{
+					Term:          self.Term(),
+					ConflictIndex: entry.Index,
+					ConflictTerm:  0,
+					Success:       false,
+				}
+			}
 			}
 		} else {
 			self.Modify(RoleFollower, &proto.RaftState{ Term: data.Term, VoteFor: -1 })

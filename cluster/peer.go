@@ -1,9 +1,11 @@
 package cluster
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,10 +17,8 @@ import (
 	"iron-bank/proto"
 )
 
-type MessageType string
-
 type ClusterMessage struct {
-	Type     MessageType 
+	Type     string 
 	SenderID uint64      
 	HTTPAddr string      
 	TCPAddr  string      
@@ -169,7 +169,11 @@ func (pm *PeerMap) HandleTCPConnection(conn net.Conn, self PeerInfo) {
 	}
 }
 
-func (pm *PeerMap) AnnounceTo(targetTCP string, self *NodeState, timeout time.Duration, ctx context.Context) error {
+func (pm *PeerMap) AnnounceTo(
+	targetTCP string, 
+	self *NodeState, 
+	timeout time.Duration, 
+	ctx context.Context) error {
 	conn, err := net.DialTimeout("tcp", targetTCP, timeout)
 	if err != nil {
 		return err
@@ -238,11 +242,18 @@ func (pm *PeerMap) String() string {
 	return b.String()
 }
 
-func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArgs, ctx context.Context, interval time.Duration, self *NodeState) error {
-	var dialer net.Dialer
-	var conn net.Conn
-	var err error
-	var PrevLogIndex, PrevLogTerm, LeaderCommit uint64
+func sendAndListenToFollower(
+	targetTCP string, 
+	send chan *proto.AppendEntriesArgs, 
+	ctx context.Context, 
+	interval time.Duration, 
+	self *NodeState) error {
+	var(
+		dialer net.Dialer
+		conn net.Conn
+		err error
+		PrevLogIndex, PrevLogTerm, LeaderCommit uint64
+	)
 
 	for {
 		conn, err = dialer.DialContext(ctx, "tcp", targetTCP)
@@ -259,7 +270,7 @@ func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArg
 		select {
 		case data := <-send:
 			PrevLogIndex = data.PrevLogIndex
-			PrevLogTerm = data.PrevLogIndex
+			PrevLogTerm = data.PrevLogTerm
 			LeaderCommit = data.LeaderCommit
 
 			payload := proto.MustMarshal(data)
@@ -279,13 +290,13 @@ func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArg
 			if _, err := conn.Write(payload); err != nil {
 				return err
 			}
-
+			// keep a timeout for here otherwise this will become a blocked read
 			_, err := io.ReadFull(conn, header)
 			if err != nil {
 				fmt.Println("Connection closed or read error:", err)
 				return err
 			}
-			length := binary.BigEndian.Uint32(header)
+			length := binary.LittleEndian.Uint64(header)
 
 			read := make([]byte, length)
 			_, err = io.ReadFull(conn, read)
@@ -336,105 +347,145 @@ func sendAndListenToFollower(targetTCP string, send chan *proto.AppendEntriesArg
 }
 
 func listenAndReplyToLeader(self *NodeState) {
-	tcpLn, err := net.Listen("tcp", self.TCPAddr)
-	if err != nil {
-		fmt.Println("error on starting a TCP listener:", err)
-		return
+	var(
+		tcpLn net.Listener
+		out []byte
+		err error
+	)
+	
+	listenChan := make(chan []byte)
+	
+	for {
+		tcpLn, err = net.Listen("tcp", self.TCPAddr)
+		if err != nil {
+			fmt.Println("error on starting a TCP listener:", err)
+		}
+		break
 	}
-	defer tcpLn.Close()
+	go listenContinuously(listenChan, self, tcpLn)
 
-	conn, err := tcpLn.Accept()
-	if err != nil {
-		fmt.Println("error on listening for a TCP connection:", err)
-		return
-	}
-	typeBuf := make([]byte, 1)
-	_, err = io.ReadFull(conn, typeBuf)
-	if err != nil {
-		fmt.Println("Connection closed or read error:", err)
-		return
-	}
-	msgType := typeBuf[0]
-
-	header := make([]byte, 8)
-	_, err = io.ReadFull(conn, header)
-	if err != nil {
-		fmt.Println("Connection closed or read error:", err)
-		return
-	}
-	length := binary.BigEndian.Uint64(header)
-
-	payload := make([]byte, length)
-	_, err = io.ReadFull(conn, payload)
-	if err != nil {
-		fmt.Println("Failed to read complete payload:", err)
-		return
-	}
-
-	if msgType == MsgAppendEntries {
-		data := &proto.AppendEntriesArgs{}
-		proto.MustUnmarshal(payload, data)
-		var reply *proto.AppendEntriesReply
-
-		if data.Term < self.Term() {
-			reply = &proto.AppendEntriesReply{
-				Term:          self.Term(),
-				ConflictIndex: 0,
-				ConflictTerm:  0,
-				Success:       false,
-			}
-		} else if data.Term == self.Term() {
-			// check what is to be done of the entries and act accordingly
-			entry, err := self.WAL.GetLastEntryInLog()
-			if data.PrevLogIndex == entry.Index {
-				if data.PrevLogTerm == entry.Term {
-					self.mu.RLock()
-					defer self.mu.RUnlock()
-		
+	ticker := time.NewTicker(time.Duration(float64(self.ID) * 2.5) * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case stream := <- listenChan:
+			if stream[0] == MsgAppendEntries {
+				data := &proto.AppendEntriesArgs{}
+				proto.MustUnmarshal(stream[10:], data)
+				var reply *proto.AppendEntriesReply
+				
+				if data.Term < self.Term() {
+					reply = &proto.AppendEntriesReply{
+						Term:          self.Term(),
+						ConflictIndex: 0,
+						ConflictTerm:  0,
+						Success:       false,
+					}
+				} else if data.Term == self.Term() {
+					entry, err := self.WAL.GetLastEntryInLog()
 					if err != nil {
 						//handle this later on
 					}
-						for _, entries := range data.Entries {
-							self.RaftState.Log = append(self.RaftState.Log, entries)
+					
+					if data.PrevLogIndex == entry.Index {
+						if data.PrevLogTerm == entry.Term {
+							if len(data.Entries) > 0 {
+								self.mu.RLock()
+								for _, entries := range data.Entries {
+									self.RaftState.Log = append(self.RaftState.Log, entries)
+								}
+								fmt.Println("appended entries")
+								
+								reply = &proto.AppendEntriesReply{
+									Term:          self.Term(),
+									ConflictIndex: 0,
+									ConflictTerm:  0,
+									Success:       true,
+								}
+								self.mu.RUnlock()
+							} else  {
+								//empty entries meaning it's a liveness signal
+							}
 						}
-						
+					} else if  data.PrevLogIndex > entry.Index {
 						reply = &proto.AppendEntriesReply{
 							Term:          self.Term(),
-							ConflictIndex: 0,
+							ConflictIndex: entry.Index,
 							ConflictTerm:  0,
-							Success:       true,
+							Success:       false,
 						}
+					} else {
+						reply = &proto.AppendEntriesReply{
+							Term:          self.Term(),
+							ConflictIndex: entry.Index,
+							ConflictTerm:  0,
+							Success:       false,
+						}
+					}
+				} else {
+					self.Modify(RoleFollower, &proto.RaftState{ Term: data.Term, VoteFor: -1 })
 				}
-			} else if  data.PrevLogIndex > entry.Index {
-				reply = &proto.AppendEntriesReply{
-					Term:          self.Term(),
-					ConflictIndex: entry.Index,
-					ConflictTerm:  0,
-					Success:       false,
-				}
-			} else {
-				reply = &proto.AppendEntriesReply{
-					Term:          self.Term(),
-					ConflictIndex: entry.Index,
-					ConflictTerm:  0,
-					Success:       false,
-				}
+
+				typebuf := []byte{MsgAppendEntriesReply}
+				out = append(out, typebuf...)
+				payload := proto.MustMarshal(reply)
+				binary.LittleEndian.AppendUint64(out, uint64(len(payload)))
+				out = append(out, payload...)
+				listenChan <- out
+				out = nil
 			}
+			case t := <- ticker.C:
+			// start election
+		}
+	}
+}
+
+func listenContinuously(listen chan []byte, self *NodeState, tcpLn net.Listener) {
+	var(
+		typeMsg [1]byte
+		header [8]byte
+		ne net.Error
+	)
+
+	defer tcpLn.Close()
+	for {
+		conn, err := tcpLn.Accept()
+		if err != nil {
+			fmt.Println("error on listening for a TCP connection:", err)
+			continue
+		}
+
+		writer := bufio.NewWriter(conn)
+		wait := time.Duration(self.ID)
+		conn.SetReadDeadline(time.Now().Add(wait * time.Second))
+
+		if _, err := io.ReadFull(conn, typeMsg[:]); err != nil {
+			if errors.As(err, &ne) && ne.Timeout() {
+				//handle this later
 			}
 		} else {
-			self.Modify(RoleFollower, &proto.RaftState{ Term: data.Term, VoteFor: -1 })
-		}
+			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
-		replyPayload := proto.MustMarshal(reply)
-		size := uint64(len(replyPayload))
-		binary.BigEndian.AppendUint64(header, size)
+			if _, err := io.ReadFull(conn, header[:]); err != nil {
+				//handle this later
+			}
 
-		if _, err := conn.Write(header); err != nil {
-			return
-		}
-
-		if _, err := conn.Write(payload); err != nil {
-			return
+			n := binary.LittleEndian.Uint64(header[:])
+			payload := make([]byte, n + 1)
+			if _, err := io.ReadFull(conn, payload[:]); err != nil {
+				//handle this later
+			}
+			payload = append(payload, typeMsg[0])
+			listen <- payload[:]
+			
+			reply := <- listen
+			if _, err := writer.Write(reply); err != nil {
+				//handle this later on
+			}
+			if err := writer.Flush(); err != nil {
+				fmt.Println("Failed to flush packet stream to wire:", err)
+			}
 		}
 	}
 }

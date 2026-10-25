@@ -210,9 +210,14 @@ func (pm *PeerMap) AnnounceTo(
 
 	if reply.Role == RoleFollower && self.Role == RoleLeader {
 		send := make(chan *proto.AppendEntriesArgs)
-		go sendAndListenToFollower(targetTCP, send, ctx, time.Duration(1*reply.SenderID)*(time.Second), self)
+		go sendAndListenToFollower(
+			targetTCP, 
+			send, 
+			ctx, 
+			time.Duration(1*reply.SenderID)*(time.Second), 
+			self)
 	} else if reply.Role == RoleLeader && self.Role == RoleFollower {
-		go listenAndReplyToLeader(self)
+		go StartAndMonitor(self)
 	}
 
 	return nil
@@ -249,10 +254,11 @@ func sendAndListenToFollower(
 	interval time.Duration, 
 	self *NodeState) error {
 	var(
+		PrevLogIndex, PrevLogTerm, LeaderCommit uint64
 		dialer net.Dialer
 		conn net.Conn
+		out []byte
 		err error
-		PrevLogIndex, PrevLogTerm, LeaderCommit uint64
 	)
 
 	for {
@@ -261,6 +267,7 @@ func sendAndListenToFollower(
 			break
 		}
 	}
+	writer := bufio.NewWriter(conn)
 	defer conn.Close()
 
 	ticker := time.NewTicker(interval)
@@ -273,23 +280,19 @@ func sendAndListenToFollower(
 			PrevLogTerm = data.PrevLogTerm
 			LeaderCommit = data.LeaderCommit
 
+			typeBuf := []byte{MsgAppendEntries}
+			out = append(out, typeBuf...)
 			payload := proto.MustMarshal(data)
-
 			size := uint64(len(payload))
-			header := make([]byte, 8)
-			binary.LittleEndian.PutUint64(header, size)
-
-			if _, err := conn.Write([]byte{MsgAppendEntries}); err != nil {
-				return err
+			binary.LittleEndian.PutUint64(out, size)
+			out = append(out, payload...)
+			if _, err := writer.Write(out); err != nil {
+				//handle this later on
 			}
-
-			if _, err := conn.Write(header); err != nil {
-				return err
+			if err := writer.Flush(); err != nil {
+				fmt.Println("Failed to flush packet stream to wire:", err)
 			}
-
-			if _, err := conn.Write(payload); err != nil {
-				return err
-			}
+			
 			// keep a timeout for here otherwise this will become a blocked read
 			_, err := io.ReadFull(conn, header)
 			if err != nil {
@@ -346,7 +349,7 @@ func sendAndListenToFollower(
 	}
 }
 
-func listenAndReplyToLeader(self *NodeState) {
+func StartAndMonitor(self *NodeState) {
 	var(
 		tcpLn net.Listener
 		out []byte
@@ -359,17 +362,18 @@ func listenAndReplyToLeader(self *NodeState) {
 		tcpLn, err = net.Listen("tcp", self.TCPAddr)
 		if err != nil {
 			fmt.Println("error on starting a TCP listener:", err)
+			continue
 		}
 		break
 	}
-	go listenContinuously(listenChan, self, tcpLn)
+	go listenAndReply(listenChan, self, tcpLn)
 
 	ticker := time.NewTicker(time.Duration(float64(self.ID) * 2.5) * time.Second)
 	defer ticker.Stop()
 	
 	for {
 		select {
-		case stream := <- listenChan:
+		case stream := <-listenChan:
 			if stream[0] == MsgAppendEntries {
 				data := &proto.AppendEntriesArgs{}
 				proto.MustUnmarshal(stream[10:], data)
@@ -432,16 +436,16 @@ func listenAndReplyToLeader(self *NodeState) {
 				payload := proto.MustMarshal(reply)
 				binary.LittleEndian.AppendUint64(out, uint64(len(payload)))
 				out = append(out, payload...)
-				listenChan <- out
+				listenChan <-out
 				out = nil
 			}
-			case t := <- ticker.C:
+			// case t := <-ticker.C:
 			// start election
 		}
 	}
 }
 
-func listenContinuously(listen chan []byte, self *NodeState, tcpLn net.Listener) {
+func listenAndReply(listen chan []byte, self *NodeState, tcpLn net.Listener) {
 	var(
 		typeMsg [1]byte
 		header [8]byte
@@ -477,9 +481,9 @@ func listenContinuously(listen chan []byte, self *NodeState, tcpLn net.Listener)
 				//handle this later
 			}
 			payload = append(payload, typeMsg[0])
-			listen <- payload[:]
+			listen<- payload[:]
 			
-			reply := <- listen
+			reply := <-listen
 			if _, err := writer.Write(reply); err != nil {
 				//handle this later on
 			}

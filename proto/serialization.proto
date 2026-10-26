@@ -54,6 +54,18 @@ message AppendEntriesReply {
     bool Success = 4;
 }
 
+message RequestVoteArgs {
+    uint64 Term = 1;
+    uint64 CandidateID = 2;
+    uint64 LastLogIndex = 3;
+    uint64 LastLogTerm = 4;
+}
+
+message RequestVoteReply {
+    uint64 Term = 1;
+    bool VoteGranted = 2;
+}
+
 message RaftState {
     uint64 Term = 1;
     int64 VoteFor = 2;

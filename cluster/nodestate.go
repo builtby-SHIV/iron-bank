@@ -241,3 +241,172 @@ func (ns *NodeState) Snapshot() NodeState {
 		RaftState: rs,
 	}
 }
+
+func (ns *NodeState) NodeID() uint64 {
+	return ns.ID
+}
+
+func (ns *NodeState) CurrentTerm() uint64 {
+	return ns.Term()
+}
+
+func (ns *NodeState) GetRole() string {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	return ns.Role
+}
+
+func (ns *NodeState) LastLogIndex() uint64 {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	if ns.WAL != nil {
+		if entry, err := ns.WAL.GetLastEntryInLog(); err == nil && entry != nil {
+			return entry.Index
+		}
+	}
+	if ns.RaftState != nil && len(ns.RaftState.Log) > 0 {
+		return ns.RaftState.Log[len(ns.RaftState.Log)-1].Index
+	}
+	return 0
+}
+
+func (ns *NodeState) LastLogTerm() uint64 {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	if ns.WAL != nil {
+		if entry, err := ns.WAL.GetLastEntryInLog(); err == nil && entry != nil {
+			return entry.Term
+		}
+	}
+	if ns.RaftState != nil && len(ns.RaftState.Log) > 0 {
+		return ns.RaftState.Log[len(ns.RaftState.Log)-1].Term
+	}
+	return 0
+}
+
+// CommitIndex returns the leader's known committed log index.
+func (ns *NodeState) CommitIndex() uint64 {
+	return 0
+}
+
+func (ns *NodeState) GetLogEntries(nextIndex uint64) (uint64, uint64, []*proto.LogEntry, uint64) {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	prevIndex := nextIndex - 1
+	prevTerm := uint64(0)
+	var entries []*proto.LogEntry
+
+	if ns.RaftState != nil {
+		for _, entry := range ns.RaftState.Log {
+			if entry.Index == prevIndex {
+				prevTerm = entry.Term
+			}
+			if entry.Index >= nextIndex {
+				entries = append(entries, entry)
+			}
+		}
+	}
+
+	return prevIndex, prevTerm, entries, 0
+}
+
+func (ns *NodeState) HandleAppendEntries(args *proto.AppendEntriesArgs) *proto.AppendEntriesReply {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	currentTerm := uint64(0)
+	if ns.RaftState != nil {
+		currentTerm = ns.RaftState.Term
+	}
+
+	if args.Term < currentTerm {
+		return &proto.AppendEntriesReply{
+			Term:    currentTerm,
+			Success: false,
+		}
+	}
+
+	if args.Term > currentTerm {
+		ns.Role = RoleFollower
+		if ns.RaftState != nil {
+			ns.RaftState.Term = args.Term
+			ns.RaftState.VoteFor = -1
+		}
+		_ = ns.Save()
+	}
+
+	return &proto.AppendEntriesReply{
+		Term:    args.Term,
+		Success: true,
+	}
+}
+
+func (ns *NodeState) HandleRequestVote(args *proto.RequestVoteArgs) *proto.RequestVoteReply {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	currentTerm := uint64(0)
+	if ns.RaftState != nil {
+		currentTerm = ns.RaftState.Term
+	}
+
+	if args.Term < currentTerm {
+		return &proto.RequestVoteReply{
+			Term:        currentTerm,
+			VoteGranted: false,
+		}
+	}
+
+	if args.Term > currentTerm {
+		ns.Role = RoleFollower
+		if ns.RaftState != nil {
+			ns.RaftState.Term = args.Term
+			ns.RaftState.VoteFor = -1
+		}
+		_ = ns.Save()
+	}
+
+	voteGranted := false
+	if ns.RaftState != nil && (ns.RaftState.VoteFor == -1 || ns.RaftState.VoteFor == int64(args.CandidateID)) {
+		ns.RaftState.VoteFor = int64(args.CandidateID)
+		voteGranted = true
+		_ = ns.Save()
+	}
+
+	return &proto.RequestVoteReply{
+		Term:        args.Term,
+		VoteGranted: voteGranted,
+	}
+}
+
+func (ns *NodeState) BecomeFollower(term uint64) {
+	ns.mu.Lock()
+	ns.Role = RoleFollower
+	if ns.RaftState != nil && term > ns.RaftState.Term {
+		ns.RaftState.Term = term
+		ns.RaftState.VoteFor = -1
+	}
+	ns.mu.Unlock()
+	_ = ns.Save()
+}
+
+func (ns *NodeState) BecomeCandidate() {
+	ns.mu.Lock()
+	ns.Role = "candidate"
+	if ns.RaftState != nil {
+		ns.RaftState.Term++
+		ns.RaftState.VoteFor = int64(ns.ID)
+	}
+	ns.mu.Unlock()
+	_ = ns.Save()
+}
+
+var _ RaftHooks = (*NodeState)(nil)
+
+func (ns *NodeState) BecomeLeader() {
+	ns.mu.Lock()
+	ns.Role = RoleLeader
+	ns.mu.Unlock()
+	_ = ns.Save()
+}

@@ -1,12 +1,14 @@
 package raft
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"iron-bank/proto"
 	"iron-bank/storage"
@@ -14,24 +16,33 @@ import (
 
 type Role string
 
+type rpcEvent struct {
+}
+
 type NodeState struct {
-	ID				uint64
-	Role			Role
-	CommitIndex		uint64
-	statePath		string
-	Transport		Transport
-	RaftState		*proto.RaftState
-	WAL				*storage.WAL
-	mu				sync.RWMutex
+	ID          uint64
+	Role        Role
+	CommitIndex uint64
+	statePath   string
+	Transport   Transport
+	rpcCh       chan rpcEvent // incoming requests from the forwarders
+	proposeCh   chan proposal // client commands
+	applyCh     chan []*proto.LogEntry
+	stopCh      chan struct{}
+	RaftState   *proto.RaftState
+	WAL         *storage.WAL
+	ctx			context.Context
+	stop		context.CancelFunc
+	mu          sync.RWMutex
 }
 
 const (
-	RoleLeader Role   = "leader"
-	RoleFollower Role = "follower"
-	RoleCandidate Role = "candidate"
-	RoleUnknown Role = "unknown"
-	nodeStateFile = "raft_state.bin"
-	WALDirectorySuffix = "_wal"
+	RoleLeader         Role = "leader"
+	RoleFollower       Role = "follower"
+	RoleCandidate      Role = "candidate"
+	RoleUnknown        Role = "unknown"
+	nodeStateFile           = "raft_state.bin"
+	WALDirectorySuffix      = "_wal"
 )
 
 func ParseRole(s string) (string, error) {
@@ -50,23 +61,23 @@ func ParseRole(s string) (string, error) {
 }
 
 func NewNodeState(
-	id uint64, 
-	httpAddr, 
-	tcpAddr, 
-	role, 
-	dir string, 
+	id uint64,
+	httpAddr,
+	tcpAddr,
+	role,
+	dir string,
 	raftState *proto.RaftState) *NodeState {
 	// ctx, cancel := context.WithCancel(context.Background())
 
-	wal, err := storage.OpenWAL(dir + WALDirectorySuffix, true, 128000, 1000)
+	wal, err := storage.OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil
 	}
-	
+
 	if raftState == nil {
 		raftState = &proto.RaftState{
-			Term: 0, 
+			Term:    0,
 			VoteFor: -1,
 		}
 	}
@@ -76,19 +87,19 @@ func NewNodeState(
 		TCPAddr:   tcpAddr,
 		Role:      role,
 		RaftState: raftState,
-		WAL: 	   wal,
+		WAL:       wal,
 	}
 }
 
 func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 	// _, cancel := context.WithCancel(context.Background())
 
-	wal, err := storage.OpenWAL(dataDir + WALDirectorySuffix, true, 128000, 1000)
+	wal, err := storage.OpenWAL(dataDir+WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil, err
 	}
-	
+
 	statePath := filepath.Join(dataDir, nodeStateFile)
 
 	data, err := os.ReadFile(statePath)
@@ -99,7 +110,7 @@ func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 				RaftState: &proto.RaftState{
 					Term:    0,
 					VoteFor: -1,
-					Log: [] *proto.LogEntry{},
+					Log:     []*proto.LogEntry{},
 				},
 				WAL: wal,
 			}
@@ -132,14 +143,14 @@ func (ns *NodeState) Save() error {
 		ns.RaftState = &proto.RaftState{
 			Term:    0,
 			VoteFor: -1,
-			Log: [] *proto.LogEntry{},
+			Log:     []*proto.LogEntry{},
 		}
 	}
 
 	payload := &proto.RaftState{
 		Term:    ns.RaftState.Term,
 		VoteFor: ns.RaftState.VoteFor,
-		Log: 	 ns.RaftState.Log,
+		Log:     ns.RaftState.Log,
 	}
 
 	data := proto.MustMarshal(payload)
@@ -201,27 +212,57 @@ func (ns *NodeState) UpdateRole(role string) error {
 func (ns *NodeState) run() {
 	for {
 		switch ns.Role {
-			case RoleLeader:
+		case RoleLeader:
 			ns.Role = ns.runLeader()
-			case RoleFollower:
+		case RoleFollower:
 			ns.Role = ns.runFollower()
-			case RoleCandidate:
+		case RoleCandidate:
 			ns.Role = ns.runCandidate()
 		}
 	}
 }
 
 func (ns *NodeState) runLeader() Role {
-	
+	interval := (time.Duration(float64(ns.ID) * 2.5)) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// start heartbeats
+		case <-ns.rpcCh:
+			// handle incoming messages
+		case <- ns.proposeCh:
+			// new commands passed from client
+		case <-ns.ctx.Done():
+			return ""
+		}
+	}
 }
 
 func (ns *NodeState) runFollower() Role {
-	
+	interval := (time.Duration(float64(ns.ID) * 2.5)) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// start election by becoming candidate
+			return RoleCandidate
+		case <-ns.rpcCh:
+			// handle incoming messages
+			case <-ns.ctx.Done():
+			return ""
+		}
+	}
 }
 
 func (ns *NodeState) runCandidate() Role {
-	
+
 }
+
 // func (ns *NodeState) Term() uint64 {
 // 	ns.mu.RLock()
 // 	defer ns.mu.RUnlock()

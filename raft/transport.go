@@ -3,12 +3,16 @@ package raft
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
 	"time"
 
+	googleproto "google.golang.org/protobuf/proto"
 	"iron-bank/proto"
 )
 
@@ -60,7 +64,7 @@ func (t *TCPTransport) Add(id, addr string) {
 	t.Peers[id] = &peerConn{ addr: addr }
 }
 
-func (t *TCPTransport) ListenLoop(addr string) {
+func (t *TCPTransport) ListenLoop(addr string, rpCh chan *RPCEvent) {
 	var(
 		listener net.Listener
 		lc net.ListenConfig
@@ -89,11 +93,26 @@ func (t *TCPTransport) ListenLoop(addr string) {
 		}
 	}
 
-	go handleIncoming(conn)
+	go handleIncoming(conn, t.ctx, rpCh)
 }
 
-func handleIncoming(conn net.Conn) {
-	
+func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
+	var(
+		msgType	byte
+		msg		googleproto.Message
+		err		error
+	)
+
+	if msgType, msg, err = DecodeMessage(conn); err != nil {
+		fmt.Printf("Error in reading the incoming message %v\n", err)
+			return
+	}
+
+	select {
+		case rpCh<- &RPCEvent{ msgType: msgType, msg: msg }:
+		case <-ctx.Done():
+		return
+	}
 }
 
 func (t *TCPTransport) BroadcastAppendEntries(args *proto.AppendEntriesArgs) {

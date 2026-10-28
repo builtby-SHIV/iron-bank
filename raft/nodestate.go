@@ -10,13 +10,16 @@ import (
 	"sync"
 	"time"
 
+	googleproto "google.golang.org/protobuf/proto"
 	"iron-bank/proto"
 	"iron-bank/storage"
 )
 
 type Role string
 
-type rpcEvent struct {
+type RPCEvent struct {
+	msgType	byte
+	msg		googleproto.Message
 }
 
 type clientCmd struct {
@@ -37,7 +40,7 @@ type NodeState struct {
 	CommitIndex uint64
 	statePath   string
 	tp		    TCPTransport
-	rpcCh       chan rpcEvent // incoming requests from the forwarders
+	rpcCh       chan *RPCEvent // incoming requests from the forwarders
 	clientCh    chan clientCmd // client commands
 	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
@@ -223,7 +226,7 @@ func (ns *NodeState) UpdateRole(role string) error {
 }
 
 func (ns *NodeState) run() {
-	go ns.tp.ListenLoop(ns.tp.TCPAddr)
+	go ns.tp.ListenLoop(ns.tp.TCPAddr, ns.rpcCh)
 	for {
 		switch ns.Role {
 		case RoleLeader:

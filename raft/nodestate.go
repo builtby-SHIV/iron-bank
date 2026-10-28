@@ -223,6 +223,7 @@ func (ns *NodeState) UpdateRole(role string) error {
 }
 
 func (ns *NodeState) run() {
+	go ns.tp.ListenLoop(ns.tp.TCPAddr)
 	for {
 		switch ns.Role {
 		case RoleLeader:
@@ -266,7 +267,6 @@ func (ns *NodeState) runLeader() Role {
 			}
 
 			ns.tp.BroadcastAppendEntries(args)
-			
 		case <-ns.ctx.Done():
 			ns.cancel()
 			return ""

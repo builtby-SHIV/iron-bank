@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ type Transport interface {
 		args *proto.AppendEntriesArgs,
 	) (proto.AppendEntriesReply, error)
 	BroadcastAppendEntries(args *proto.AppendEntriesArgs)
+	ListenLoop(addr string)
 	// Consume() <-chan rpcEvent
 	Close() error
 }
@@ -56,6 +58,42 @@ func (t *TCPTransport) Add(id, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.Peers[id] = &peerConn{ addr: addr }
+}
+
+func (t *TCPTransport) ListenLoop(addr string) {
+	var(
+		listener net.Listener
+		lc net.ListenConfig
+		conn net.Conn
+		err error
+	)
+	
+	if listener, err = lc.Listen(t.ctx, "tcp", addr); err != nil {
+		log.Fatalf("unable to start tcp connection on port %v, %v", addr, err)
+	}
+
+	backoff := 50 * time.Millisecond
+	for {
+		conn, err = listener.Accept()
+		if err == nil {
+			break
+		}
+		select {
+		case <-time.After(backoff):
+			fmt.Printf("Error in listening to incoming message %v\n", err)
+			if backoff < 500 * time.Millisecond {
+				backoff *= 2
+			}
+		case <-t.ctx.Done():
+			return
+		}
+	}
+
+	go handleIncoming(conn)
+}
+
+func handleIncoming(conn net.Conn) {
+	
 }
 
 func (t *TCPTransport) BroadcastAppendEntries(args *proto.AppendEntriesArgs) {
@@ -126,12 +164,11 @@ func (t *TCPTransport) AppendEntries(
 				return nil
 			}
 		}
+		peer.mu.Lock()
+		peer.conn = conn
+		peer.mu.Unlock()
 	}
 
-	peer.mu.Lock()
-	peer.conn = conn
-	peer.mu.Unlock()
-	
 	w := bufio.NewWriter(peer.conn)
 	if _, err := w.Write(encodedMsg); err != nil {
 		return err
@@ -143,4 +180,8 @@ func (t *TCPTransport) AppendEntries(
 	return nil
 }
 
-func (t *TCPTransport) RequestVote(ctx context.Context, id string, a *proto.RequestVoteArgs) (proto.RequestVoteReply, error)
+func (t *TCPTransport) RequestVote(
+	ctx context.Context, 
+	id string, 
+	a *proto.RequestVoteArgs,
+) (proto.RequestVoteReply, error)

@@ -29,13 +29,23 @@ enum Command {
   WRITE_SST = 2;
 }
 
-message LogEntry {
-    uint64 Index = 1;
-    uint64 Term = 2;         
-    string key = 3;
-    optional bytes value = 4;
-    uint32  CRC = 5;
-    Command command = 6;
+message KVPair {
+    string Key = 1;
+    string Value = 2;
+    Command command = 3;
+}
+
+message WALEntry {      
+    string key = 1;
+    optional bytes value = 2;
+    uint32  CRC = 3;
+    Command command = 4;
+}
+
+message RaftLog {
+    uint64 Term = 1;
+    uint64 LogIndex = 2;
+    KVPair Entries = 3; 
 }
 
 message AppendEntriesArgs {
@@ -44,7 +54,7 @@ message AppendEntriesArgs {
     uint64 PrevLogIndex = 3;     
     uint64 PrevLogTerm = 4;
     uint64 LeaderCommit = 5;  
-    repeated LogEntry Entries = 6;  
+    repeated KVPair Entries = 6;  
 }
 
 message AppendEntriesReply {
@@ -69,5 +79,4 @@ message RequestVoteReply {
 message RaftState {
     uint64 Term = 1;
     int64 VoteFor = 2;
-    repeated LogEntry Log = 6;
 }

@@ -19,20 +19,32 @@ type Role string
 type rpcEvent struct {
 }
 
+type clientCmd struct {
+	command proto.Command
+	key, value string
+}
+
+type leaderState struct {
+    nextIndex  map[string]uint64
+    matchIndex map[string]uint64
+    inflight   map[string]bool
+    pending    map[uint64]chan result // client waiting on log index N
+}
+
 type NodeState struct {
 	ID          uint64
 	Role        Role
 	CommitIndex uint64
 	statePath   string
-	Transport   Transport
+	tp		    TCPTransport
 	rpcCh       chan rpcEvent // incoming requests from the forwarders
-	proposeCh   chan proposal // client commands
-	applyCh     chan []*proto.LogEntry
+	clientCh    chan clientCmd // client commands
+	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
 	RaftState   *proto.RaftState
-	WAL         *storage.WAL
-	ctx			context.Context
-	stop		context.CancelFunc
+	Log         *storage.WAL
+	ctx         context.Context
+	cancel      context.CancelFunc
 	mu          sync.RWMutex
 }
 
@@ -64,12 +76,11 @@ func NewNodeState(
 	id uint64,
 	httpAddr,
 	tcpAddr,
-	role,
 	dir string,
+	role Role,
+	ctx context.Context,
 	raftState *proto.RaftState) *NodeState {
-	// ctx, cancel := context.WithCancel(context.Background())
-
-	wal, err := storage.OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
+	wal, err := storage.OpenWAL(dir + WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil
@@ -81,13 +92,15 @@ func NewNodeState(
 			VoteFor: -1,
 		}
 	}
+
+	newCtx, cancel := context.WithCancel(ctx)
 	return &NodeState{
-		ID:        id,
-		HTTPAddr:  httpAddr,
-		TCPAddr:   tcpAddr,
-		Role:      role,
-		RaftState: raftState,
-		WAL:       wal,
+		ID:			id,
+		Role:		role,
+		RaftState:	raftState,
+		Log:		wal,
+		ctx:		newCtx,
+		cancel:		cancel,
 	}
 }
 
@@ -110,7 +123,7 @@ func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 				RaftState: &proto.RaftState{
 					Term:    0,
 					VoteFor: -1,
-					Log:     []*proto.LogEntry{},
+					Log:     []*proto.RaftLog{},
 				},
 				WAL: wal,
 			}
@@ -143,7 +156,7 @@ func (ns *NodeState) Save() error {
 		ns.RaftState = &proto.RaftState{
 			Term:    0,
 			VoteFor: -1,
-			Log:     []*proto.LogEntry{},
+			Log:     []*proto.RaftLog{},
 		}
 	}
 
@@ -233,9 +246,29 @@ func (ns *NodeState) runLeader() Role {
 			// start heartbeats
 		case <-ns.rpcCh:
 			// handle incoming messages
-		case <- ns.proposeCh:
-			// new commands passed from client
+		case cmd := <-ns.clientCh:
+			// do this from where the entry is being sent
+			// if err := ns.Log.WriteEntry(cmd.command, cmd.key, []byte(cmd.value)); err != nil {
+			// }
+			
+			entry := &proto.KVPair{
+				Key: cmd.key,
+				Value: cmd.value,
+				Command: cmd.command,
+			}
+			args := &proto.AppendEntriesArgs{
+				Term: ns.RaftState.Term,
+				LeaderID: ns.ID,
+				PrevLogIndex: ns.WAL.CurrSequenceNo - 1,
+				PrevLogTerm: ns.WAL.PrevLogTerm,
+				LeaderCommit: ns.CommitIndex,
+				Entries: []*proto.KVPair{entry},
+			}
+
+			ns.tp.BroadcastAppendEntries(args)
+			
 		case <-ns.ctx.Done():
+			ns.cancel()
 			return ""
 		}
 	}
@@ -252,16 +285,17 @@ func (ns *NodeState) runFollower() Role {
 			// start election by becoming candidate
 			return RoleCandidate
 		case <-ns.rpcCh:
-			// handle incoming messages
-			case <-ns.ctx.Done():
+		// handle incoming messages
+		case <-ns.ctx.Done():
+			ns.stop()
 			return ""
 		}
 	}
 }
 
 func (ns *NodeState) runCandidate() Role {
-
 }
+
 
 // func (ns *NodeState) Term() uint64 {
 // 	ns.mu.RLock()
@@ -281,13 +315,13 @@ func (ns *NodeState) runCandidate() Role {
 // 	return -1
 // }
 
-// func (ns *NodeState) Log() [] *proto.LogEntry {
+// func (ns *NodeState) Log() [] *proto.RaftLog {
 // 	ns.mu.RLock()
 // 	defer ns.mu.RUnlock()
 // 	if ns.RaftState != nil {
 // 		return ns.RaftState.Log
 // 	}
-// 	return [] *proto.LogEntry{}
+// 	return [] *proto.RaftLog{}
 // }
 
 // func (ns *NodeState) Snapshot() NodeState {
@@ -362,13 +396,13 @@ func (ns *NodeState) runCandidate() Role {
 // // 	return 0
 // // }
 
-// func (ns *NodeState) GetLogEntries(nextIndex uint64) (uint64, uint64, []*proto.LogEntry, uint64) {
+// func (ns *NodeState) GetLogEntries(nextIndex uint64) (uint64, uint64, []*proto.RaftLog, uint64) {
 // 	ns.mu.RLock()
 // 	defer ns.mu.RUnlock()
 
 // 	prevIndex := nextIndex - 1
 // 	prevTerm := uint64(0)
-// 	var entries []*proto.LogEntry
+// 	var entries []*proto.RaftLog
 
 // 	if ns.RaftState != nil {
 // 		for _, entry := range ns.RaftState.Log {
@@ -384,7 +418,8 @@ func (ns *NodeState) runCandidate() Role {
 // 	return prevIndex, prevTerm, entries, 0
 // }
 
-// func (ns *NodeState) HandleAppendEntries(args *proto.AppendEntriesArgs) *proto.AppendEntriesReply {
+// func (ns *NodeState) HandleAppendEntries(
+// args *proto.AppendEntriesArgs) *proto.AppendEntriesReply {
 // 	ns.mu.Lock()
 // 	defer ns.mu.Unlock()
 

@@ -19,6 +19,7 @@ import (
 type Role string
 
 type RPCEvent struct {
+	peer	string
 	msgType byte
 	msg     googleproto.Message
 }
@@ -42,8 +43,8 @@ type NodeState struct {
 	CommitIndex uint64
 	statePath   string
 	tp          TCPTransport
-	ls			*leaderState
-	rpcCh       chan *RPCEvent // incoming requests from the forwarders
+	ls			*LeaderState
+	replyCh     chan *RPCEvent // incoming requests from the forwarders
 	clientCh    chan clientCmd // client commands
 	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
@@ -253,7 +254,7 @@ func (ns *NodeState) runLeader() Role {
 		select {
 		case <-ticker.C:
 			// start heartbeats
-		case rp := <-ns.rpcCh:
+		case rp := <-ns.replyCh:
 			// handle incoming messages
 			switch rp.msgType {
 			case TypeAppendEntriesReply:
@@ -284,17 +285,9 @@ func (ns *NodeState) runLeader() Role {
 					ns.ls.mu.RLock()
 					ns.ls.inflight[id] = true
 					ns.ls.mu.RUnlock()
-					
-					go func(id string) {
-						newCtx, cancel := context.WithCancel(ns.ctx)
-						defer cancel()
-						if err := ns.tp.AppendEntries(newCtx, id, args); err != nil {
-							fmt.Println(err.Error())
-						}
-					}(id)
-				}
+					go ns.tp.sendToAppendEntries(id, TypeAppendEntries, args, ns.replyCh)
 			}
-			defer ns.tp.mu.RUnlock()
+			ns.tp.mu.RUnlock()
 		case <-ns.ctx.Done():
 			ns.cancel()
 			return ""

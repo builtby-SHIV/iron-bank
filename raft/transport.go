@@ -120,16 +120,71 @@ func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
 	}
 }
 
+func (t *TCPTransport) sendToAppendEntries(
+	id string, 
+	msgType byte,
+	args *proto.AppendEntriesArgs,
+	replyCh chan *RPCEvent,
+) {
+	done := make(chan struct{})
+	defer close(done)
+	go func(ctx context.Context) {
+		select {
+		case <-t.ctx.Done():
+		case <-done:
+		}
+		return
+	}(t.ctx)
+
+	reply, err := t.AppendEntries(id, args)
+	if err != nil {
+		fmt.Printf("Error in sending or receiving message %v\n", err)
+	}
+
+	select {
+		case replyCh<- &RPCEvent{ msgType: msgType, msg: reply, peer: id }:
+		case <-t.ctx.Done():
+	}
+	return
+}
+
+func (t *TCPTransport) sendToRequestVote(
+	id string, 
+	msgType byte,
+	args *proto.RequestVoteArgs,
+	replyCh chan *RPCEvent,
+) {
+	done := make(chan struct{})
+	defer close(done)
+	go func(ctx context.Context) {
+		select {
+		case <-t.ctx.Done():
+		case <-done:
+		}
+		return
+	}(t.ctx)
+
+	reply, err := t.RequestVote(id, args)
+	if err != nil {
+		fmt.Printf("Error in sending or receiving message %v\n", err)
+	}
+
+	select {
+		case replyCh<- &RPCEvent{ msgType: msgType, msg: reply, peer: id }:
+		case <-t.ctx.Done():
+	}
+	return
+}
+
 func (t *TCPTransport) AppendEntries(
-	ctx context.Context, 
 	id string, 
 	args *proto.AppendEntriesArgs,
-) error {
+) (*proto.AppendEntriesReply, error) {
 	t.mu.RLock()
 	peer, exists := t.Peers[id]
 	t.mu.RUnlock() 
 	if !exists {
-		return fmt.Errorf("peer %s not found", id)
+		return &proto.AppendEntriesReply{}, fmt.Errorf("peer %s not found", id)
 	}
 
 	done := make(chan struct{})
@@ -144,7 +199,7 @@ func (t *TCPTransport) AppendEntries(
 		case <-done:
 		}
 		return
-	}(ctx)
+	}(t.ctx)
 
 	var(
 		conn net.Conn
@@ -153,14 +208,14 @@ func (t *TCPTransport) AppendEntries(
 	
 	encodedMsg, err := EncodeMessage(TypeAppendEntries, args)
 	if err != nil {
-		return err
+		return &proto.AppendEntriesReply{}, err
 	}
 
 	if peer.conn == nil {
 		backoff := 50 * time.Millisecond
 		for {
 			dialer := &net.Dialer{}
-			conn, err = dialer.DialContext(ctx, "tcp", peer.addr)
+			conn, err = dialer.DialContext(t.ctx, "tcp", peer.addr)
 			if err == nil {
 				break
 			}
@@ -170,8 +225,8 @@ func (t *TCPTransport) AppendEntries(
 				if backoff < 500 * time.Millisecond {
 					backoff *= 2
 				}
-			case <-ctx.Done():
-				return nil
+			case <-t.ctx.Done():
+				return nil, nil
 			}
 		}
 		peer.mu.Lock()
@@ -181,17 +236,90 @@ func (t *TCPTransport) AppendEntries(
 
 	w := bufio.NewWriter(peer.conn)
 	if _, err := w.Write(encodedMsg); err != nil {
-		return err
+		return &proto.AppendEntriesReply{}, err
 	}
 	if err := w.Flush(); err != nil {
-		return err
+		return &proto.AppendEntriesReply{}, err
+	}
+
+	_, decodedMsg, err := DecodeMessage(peer.conn)
+	if err != nil {
+		return &proto.AppendEntriesReply{}, err
 	}
 	
-	return nil
+	return decodedMsg.(*proto.AppendEntriesReply), nil
 }
 
 func (t *TCPTransport) RequestVote(
-	ctx context.Context, 
 	id string, 
-	a *proto.RequestVoteArgs,
-) (proto.RequestVoteReply, error)
+	args *proto.RequestVoteArgs,
+) (*proto.RequestVoteReply, error) {
+	t.mu.RLock()
+	peer, exists := t.Peers[id]
+	t.mu.RUnlock() 
+	if !exists {
+		return &proto.RequestVoteReply{}, fmt.Errorf("peer %s not found", id)
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go func(ctx context.Context) {
+		select {
+		case <-t.ctx.Done():
+			if peer.conn != nil {
+				peer.conn.Close()
+				peer.conn = nil
+			}
+		case <-done:
+		}
+		return
+	}(t.ctx)
+
+	var(
+		conn net.Conn
+		err error
+	)
+	
+	encodedMsg, err := EncodeMessage(TypeAppendEntries, args)
+	if err != nil {
+		return &proto.RequestVoteReply{}, err
+	}
+
+	if peer.conn == nil {
+		backoff := 50 * time.Millisecond
+		for {
+			dialer := &net.Dialer{}
+			conn, err = dialer.DialContext(t.ctx, "tcp", peer.addr)
+			if err == nil {
+				break
+			}
+
+			select {
+			case <-time.After(backoff):
+				if backoff < 500 * time.Millisecond {
+					backoff *= 2
+				}
+			case <-t.ctx.Done():
+				return nil, nil
+			}
+		}
+		peer.mu.Lock()
+		peer.conn = conn
+		peer.mu.Unlock()
+	}
+
+	w := bufio.NewWriter(peer.conn)
+	if _, err := w.Write(encodedMsg); err != nil {
+		return &proto.RequestVoteReply{}, err
+	}
+	if err := w.Flush(); err != nil {
+		return &proto.RequestVoteReply{}, err
+	}
+
+	_, decodedMsg, err := DecodeMessage(peer.conn)
+	if err != nil {
+		return &proto.RequestVoteReply{}, err
+	}
+	
+	return decodedMsg.(*proto.RequestVoteReply), nil
+}

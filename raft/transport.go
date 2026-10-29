@@ -3,10 +3,8 @@ package raft
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
@@ -75,25 +73,32 @@ func (t *TCPTransport) ListenLoop(addr string, rpCh chan *RPCEvent) {
 	if listener, err = lc.Listen(t.ctx, "tcp", addr); err != nil {
 		log.Fatalf("unable to start tcp connection on port %v, %v", addr, err)
 	}
+	go func(ln net.Listener) { 
+		<-t.ctx.Done(); 
+		ln.Close() 
+	}(listener)
 
 	backoff := 50 * time.Millisecond
 	for {
 		conn, err = listener.Accept()
-		if err == nil {
-			break
-		}
-		select {
-		case <-time.After(backoff):
-			fmt.Printf("Error in listening to incoming message %v\n", err)
-			if backoff < 500 * time.Millisecond {
-				backoff *= 2
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) { 
+				return 
 			}
-		case <-t.ctx.Done():
-			return
-		}
+			select {
+			case <-time.After(backoff):
+				fmt.Printf("Error in listening to incoming message %v\n", err)
+				if backoff < 500 * time.Millisecond {
+					backoff *= 2
+				}
+				continue
+			case <-t.ctx.Done():
+				return
+			}
+		} 
+		go handleIncoming(conn, t.ctx, rpCh)
 	}
 
-	go handleIncoming(conn, t.ctx, rpCh)
 }
 
 func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
@@ -112,22 +117,6 @@ func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
 		case rpCh<- &RPCEvent{ msgType: msgType, msg: msg }:
 		case <-ctx.Done():
 		return
-	}
-}
-
-func (t *TCPTransport) BroadcastAppendEntries(args *proto.AppendEntriesArgs) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	for id, _ := range t.Peers {
-		if t.Peers[id].addr != t.TCPAddr {
-			go func(id string) {
-				newCtx, cancel := context.WithCancel(t.ctx)
-				defer cancel()
-				if err := t.AppendEntries(newCtx, id, args); err != nil {
-					fmt.Println(err.Error())
-				}
-			}(id)
-		}
 	}
 }
 

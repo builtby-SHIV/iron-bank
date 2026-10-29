@@ -29,10 +29,11 @@ type clientCmd struct {
 }
 
 type LeaderState struct {
-	nextIndex  map[string]uint64
-	matchIndex map[string]uint64
-	inflight   map[string]bool
-	pending    map[uint64]chan result // client waiting on log index N
+	nextIndex	map[string]uint64
+	matchIndex	map[string]uint64
+	inflight	map[string]bool
+	pending		map[uint64]chan result // client waiting on log index N
+	mu			sync.RWMutex
 }
 
 type NodeState struct {
@@ -271,13 +272,29 @@ func (ns *NodeState) runLeader() Role {
 			args := &proto.AppendEntriesArgs{
 				Term:         ns.RaftState.Term,
 				LeaderID:     ns.ID,
-				PrevLogIndex: ns.WAL.CurrSequenceNo - 1,
-				PrevLogTerm:  ns.WAL.PrevLogTerm,
+				PrevLogIndex: ns.Log.CurrSequenceNo - 1,
+				PrevLogTerm:  ns.Log.PrevLogTerm,
 				LeaderCommit: ns.CommitIndex,
 				Entries:      []*proto.KVPair{entry},
 			}
 
-			ns.tp.BroadcastAppendEntries(args)
+			ns.tp.mu.RLock()
+			for id, _ := range ns.tp.Peers {
+				if ns.tp.Peers[id].addr != ns.tp.TCPAddr {
+					ns.ls.mu.RLock()
+					ns.ls.inflight[id] = true
+					ns.ls.mu.RUnlock()
+					
+					go func(id string) {
+						newCtx, cancel := context.WithCancel(ns.ctx)
+						defer cancel()
+						if err := ns.tp.AppendEntries(newCtx, id, args); err != nil {
+							fmt.Println(err.Error())
+						}
+					}(id)
+				}
+			}
+			defer ns.tp.mu.RUnlock()
 		case <-ns.ctx.Done():
 			ns.cancel()
 			return ""

@@ -10,28 +10,29 @@ import (
 	"sync"
 	"time"
 
-	googleproto "google.golang.org/protobuf/proto"
 	"iron-bank/proto"
 	"iron-bank/storage"
+
+	googleproto "google.golang.org/protobuf/proto"
 )
 
 type Role string
 
 type RPCEvent struct {
-	msgType	byte
-	msg		googleproto.Message
+	msgType byte
+	msg     googleproto.Message
 }
 
 type clientCmd struct {
-	command proto.Command
+	command    proto.Command
 	key, value string
 }
 
-type leaderState struct {
-    nextIndex  map[string]uint64
-    matchIndex map[string]uint64
-    inflight   map[string]bool
-    pending    map[uint64]chan result // client waiting on log index N
+type LeaderState struct {
+	nextIndex  map[string]uint64
+	matchIndex map[string]uint64
+	inflight   map[string]bool
+	pending    map[uint64]chan result // client waiting on log index N
 }
 
 type NodeState struct {
@@ -39,7 +40,8 @@ type NodeState struct {
 	Role        Role
 	CommitIndex uint64
 	statePath   string
-	tp		    TCPTransport
+	tp          TCPTransport
+	ls			*leaderState
 	rpcCh       chan *RPCEvent // incoming requests from the forwarders
 	clientCh    chan clientCmd // client commands
 	applyCh     chan []*proto.RaftLog
@@ -83,7 +85,7 @@ func NewNodeState(
 	role Role,
 	ctx context.Context,
 	raftState *proto.RaftState) *NodeState {
-	wal, err := storage.OpenWAL(dir + WALDirectorySuffix, true, 128000, 1000)
+	wal, err := storage.OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil
@@ -98,12 +100,12 @@ func NewNodeState(
 
 	newCtx, cancel := context.WithCancel(ctx)
 	return &NodeState{
-		ID:			id,
-		Role:		role,
-		RaftState:	raftState,
-		Log:		wal,
-		ctx:		newCtx,
-		cancel:		cancel,
+		ID:        id,
+		Role:      role,
+		RaftState: raftState,
+		Log:       wal,
+		ctx:       newCtx,
+		cancel:    cancel,
 	}
 }
 
@@ -240,6 +242,8 @@ func (ns *NodeState) run() {
 }
 
 func (ns *NodeState) runLeader() Role {
+	ns.ls = NewLeaderState()
+
 	interval := (time.Duration(float64(ns.ID) * 2.5)) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -248,25 +252,29 @@ func (ns *NodeState) runLeader() Role {
 		select {
 		case <-ticker.C:
 			// start heartbeats
-		case <-ns.rpcCh:
+		case rp := <-ns.rpcCh:
 			// handle incoming messages
+			switch rp.msgType {
+			case TypeAppendEntriesReply:
+			
+			}
 		case cmd := <-ns.clientCh:
 			// do this from where the entry is being sent
 			// if err := ns.Log.WriteEntry(cmd.command, cmd.key, []byte(cmd.value)); err != nil {
 			// }
-			
+
 			entry := &proto.KVPair{
-				Key: cmd.key,
-				Value: cmd.value,
+				Key:     cmd.key,
+				Value:   cmd.value,
 				Command: cmd.command,
 			}
 			args := &proto.AppendEntriesArgs{
-				Term: ns.RaftState.Term,
-				LeaderID: ns.ID,
+				Term:         ns.RaftState.Term,
+				LeaderID:     ns.ID,
 				PrevLogIndex: ns.WAL.CurrSequenceNo - 1,
-				PrevLogTerm: ns.WAL.PrevLogTerm,
+				PrevLogTerm:  ns.WAL.PrevLogTerm,
 				LeaderCommit: ns.CommitIndex,
-				Entries: []*proto.KVPair{entry},
+				Entries:      []*proto.KVPair{entry},
 			}
 
 			ns.tp.BroadcastAppendEntries(args)
@@ -298,7 +306,6 @@ func (ns *NodeState) runFollower() Role {
 
 func (ns *NodeState) runCandidate() Role {
 }
-
 
 // func (ns *NodeState) Term() uint64 {
 // 	ns.mu.RLock()

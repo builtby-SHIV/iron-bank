@@ -86,3 +86,12 @@ func DecodeMessage(r io.Reader) (msgType byte, msg googleproto.Message, err erro
 
 	return msgType, msg, nil
 }
+
+func NewLeaderState() *LeaderState {
+	return &LeaderState{
+		nextIndex:  make(map[string]uint64),
+		matchIndex: make(map[string]uint64),
+		inflight:   make(map[string]bool),
+		pending:    make(map[uint64]chan result),
+	}
+}

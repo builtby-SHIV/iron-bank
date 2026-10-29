@@ -119,13 +119,15 @@ func (t *TCPTransport) BroadcastAppendEntries(args *proto.AppendEntriesArgs) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for id, _ := range t.Peers {
-		go func(id string) {
-			newCtx, cancel := context.WithCancel(t.ctx)
-			defer cancel()
-			if err := t.AppendEntries(newCtx, id, args); err != nil {
-				fmt.Println(err.Error())
-			}
-		}(id)
+		if t.Peers[id].addr != t.TCPAddr {
+			go func(id string) {
+				newCtx, cancel := context.WithCancel(t.ctx)
+				defer cancel()
+				if err := t.AppendEntries(newCtx, id, args); err != nil {
+					fmt.Println(err.Error())
+				}
+			}(id)
+		}
 	}
 }
 

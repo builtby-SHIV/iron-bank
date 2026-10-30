@@ -282,19 +282,27 @@ func (ns *NodeState) runLeader() Role {
 				sent := (rp.msgSent).(*proto.AppendEntriesArgs)
 				if recv.Term == ns.RaftState.Term {
 					if recv.Success {
-						ns.ls.matchIndex[rp.peer] = max(ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries)))
+						ns.ls.matchIndex[rp.peer] = max(
+							ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries))
+						)
 						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1	
 					} else {
 						idx, args, err := ns.handleBackup(recv.ConflictIndex)
 						ns.ls.nextIndex[rp.peer] = idx
 						if err != nil {
-							// handle this later
+							fmt.Printf("%v\n", err)
 						} else {
 							go ns.tp.sendToAppendEntries(rp.peer, TypeAppendEntries, args, ns.replyCh)
 						}
 					}
 				} else if recv.Term > ns.RaftState.Term {
 					// stale leader; depose to a follower
+					// persist raft state to config file
+					ns.tp.cancel()
+					ns.Role = RoleFollower
+					ns.RaftState.Term = recv.Term
+					ns.RaftState.VotedFor = ""
+					return RoleFollower
 				}
 			}
 		case cmd := <-ns.clientCh:

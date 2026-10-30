@@ -21,7 +21,8 @@ type Role string
 type RPCEvent struct {
 	peer	string
 	msgType byte
-	msg     googleproto.Message
+	msgRecv	googleproto.Message
+	msgSent	googleproto.Message
 }
 
 type clientCmd struct {
@@ -56,12 +57,13 @@ type NodeState struct {
 }
 
 const (
-	RoleLeader         Role = "leader"
-	RoleFollower       Role = "follower"
-	RoleCandidate      Role = "candidate"
-	RoleUnknown        Role = "unknown"
-	nodeStateFile           = "raft_state.bin"
-	WALDirectorySuffix      = "_wal"
+	RoleLeader 			  Role = "leader"
+	RoleFollower          Role = "follower"
+	RoleCandidate      	  Role = "candidate"
+	RoleUnknown        	  Role = "unknown"
+	nodeStateFile      		   = "raft_state.bin"
+	WALDirectorySuffix 		   = "_wal"
+	MAX_Entries			uint64 = 50
 )
 
 func ParseRole(s string) (string, error) {
@@ -253,18 +255,49 @@ func (ns *NodeState) runLeader() Role {
 	for {
 		select {
 		case <-ticker.C:
-			// start heartbeats
+			args := &proto.AppendEntriesArgs{
+				Term:         ns.RaftState.Term,
+				LeaderID:     ns.ID,
+				PrevLogIndex: ns.Log.CurrSequenceNo - 1,
+				PrevLogTerm:  ns.Log.PrevLogTerm,
+				LeaderCommit: ns.CommitIndex,
+				Entries:      []*proto.KVPair{},
+			}
+
+			ns.tp.mu.RLock()
+			for id, _ := range ns.tp.Peers {
+				if ns.tp.Peers[id].addr != ns.tp.TCPAddr {
+					ns.ls.mu.RLock()
+					ns.ls.inflight[id] = true
+					ns.ls.mu.RUnlock()
+					go ns.tp.sendToAppendEntries(id, TypeAppendEntries, args, ns.replyCh)
+				}
+			}
+			ns.tp.mu.RUnlock()
 		case rp := <-ns.replyCh:
-			// handle incoming messages
+			ns.ls.inflight[rp.peer] = false
 			switch rp.msgType {
-			case TypeAppendEntriesReply:
-			
+				case TypeAppendEntriesReply:
+				recv := (rp.msgRecv).(*proto.AppendEntriesReply)
+				sent := (rp.msgSent).(*proto.AppendEntriesArgs)
+				if recv.Term == ns.RaftState.Term {
+					if recv.Success {
+						ns.ls.matchIndex[rp.peer] = max(ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries)))
+						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1	
+					} else {
+						idx, args, err := ns.handleBackup(recv.ConflictIndex)
+						ns.ls.nextIndex[rp.peer] = idx
+						if err != nil {
+							// handle this later
+						} else {
+							go ns.tp.sendToAppendEntries(rp.peer, TypeAppendEntries, args, ns.replyCh)
+						}
+					}
+				} else if recv.Term > ns.RaftState.Term {
+					// stale leader; depose to a follower
+				}
 			}
 		case cmd := <-ns.clientCh:
-			// do this from where the entry is being sent
-			// if err := ns.Log.WriteEntry(cmd.command, cmd.key, []byte(cmd.value)); err != nil {
-			// }
-
 			entry := &proto.KVPair{
 				Key:     cmd.key,
 				Value:   cmd.value,
@@ -286,6 +319,7 @@ func (ns *NodeState) runLeader() Role {
 					ns.ls.inflight[id] = true
 					ns.ls.mu.RUnlock()
 					go ns.tp.sendToAppendEntries(id, TypeAppendEntries, args, ns.replyCh)
+				}
 			}
 			ns.tp.mu.RUnlock()
 		case <-ns.ctx.Done():
@@ -315,6 +349,10 @@ func (ns *NodeState) runFollower() Role {
 }
 
 func (ns *NodeState) runCandidate() Role {
+}
+
+func (ns *NodeState) handleBackup(idx uint64) (uint64, *proto.AppendEntriesArgs, error) {
+	ns.Log.ReadRaftLog(idx, MAX_Entries)
 }
 
 // func (ns *NodeState) Term() uint64 {

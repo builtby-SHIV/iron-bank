@@ -31,6 +31,7 @@ type Transport interface {
 	Close() error
 }
 
+// NOTE: remember to make tcp port as key fo Peers
 type TCPTransport struct {
 	HTTPAddr	string
 	TCPAddr		string
@@ -110,7 +111,7 @@ func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
 
 	if msgType, msg, err = DecodeMessage(conn); err != nil {
 		fmt.Printf("Error in reading the incoming message %v\n", err)
-			return
+		return
 	}
 
 	select {
@@ -142,7 +143,7 @@ func (t *TCPTransport) sendToAppendEntries(
 	}
 
 	select {
-		case replyCh<- &RPCEvent{ msgType: msgType, msg: reply, peer: id }:
+		case replyCh<- &RPCEvent{ msgType: msgType, msgRecv: reply, msgSent: args, peer: id }:
 		case <-t.ctx.Done():
 	}
 	return
@@ -208,7 +209,7 @@ func (t *TCPTransport) AppendEntries(
 	
 	encodedMsg, err := EncodeMessage(TypeAppendEntries, args)
 	if err != nil {
-		return &proto.AppendEntriesReply{}, err
+		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in encoding the message %w", err)
 	}
 
 	if peer.conn == nil {
@@ -236,15 +237,15 @@ func (t *TCPTransport) AppendEntries(
 
 	w := bufio.NewWriter(peer.conn)
 	if _, err := w.Write(encodedMsg); err != nil {
-		return &proto.AppendEntriesReply{}, err
+		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in writing the message to buffer %w", err)
 	}
 	if err := w.Flush(); err != nil {
-		return &proto.AppendEntriesReply{}, err
+		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in flushing the message from buffer %w", err)
 	}
 
 	_, decodedMsg, err := DecodeMessage(peer.conn)
 	if err != nil {
-		return &proto.AppendEntriesReply{}, err
+		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in decoding the message %w", err)
 	}
 	
 	return decodedMsg.(*proto.AppendEntriesReply), nil

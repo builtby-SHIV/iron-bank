@@ -35,17 +35,21 @@ message KVPair {
     Command command = 3;
 }
 
-message WALEntry {      
-    string key = 1;
-    optional bytes value = 2;
-    uint32  CRC = 3;
-    Command command = 4;
+message WALEntry {  
+    uint64 Index = 1;
+    string key = 2;
+    optional bytes value = 3;
+    uint32  CRC = 4;
+    Command command = 5;
 }
 
 message RaftLog {
-    uint64 Term = 1;
-    uint64 LogIndex = 2;
-    KVPair Entries = 3; 
+    uint64 LogIndex = 1;
+    uint64 Term = 2;
+    string key = 3;
+    optional bytes value = 4;
+    uint32  CRC = 5;
+    Command command = 6;
 }
 
 message AppendEntriesArgs {

@@ -348,10 +348,11 @@ func (x *KVPair) GetCommand() Command {
 
 type WALEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3,oneof" json:"value,omitempty"`
-	CRC           uint32                 `protobuf:"varint,3,opt,name=CRC,proto3" json:"CRC,omitempty"`
-	Command       Command                `protobuf:"varint,4,opt,name=command,proto3,enum=proto.Command" json:"command,omitempty"`
+	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,3,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	CRC           uint32                 `protobuf:"varint,4,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Command       Command                `protobuf:"varint,5,opt,name=command,proto3,enum=proto.Command" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -386,6 +387,13 @@ func (*WALEntry) Descriptor() ([]byte, []int) {
 	return file_serialization_proto_rawDescGZIP(), []int{5}
 }
 
+func (x *WALEntry) GetIndex() uint64 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
 func (x *WALEntry) GetKey() string {
 	if x != nil {
 		return x.Key
@@ -416,8 +424,12 @@ func (x *WALEntry) GetCommand() Command {
 
 type RaftLog struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
-	LogIndex      uint64                 `protobuf:"varint,2,opt,name=LogIndex,proto3" json:"LogIndex,omitempty"`
+	LogIndex      uint64                 `protobuf:"varint,1,opt,name=LogIndex,proto3" json:"LogIndex,omitempty"`
+	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,4,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	CRC           uint32                 `protobuf:"varint,5,opt,name=CRC,proto3" json:"CRC,omitempty"`
+	Command       Command                `protobuf:"varint,6,opt,name=command,proto3,enum=proto.Command" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -452,6 +464,13 @@ func (*RaftLog) Descriptor() ([]byte, []int) {
 	return file_serialization_proto_rawDescGZIP(), []int{6}
 }
 
+func (x *RaftLog) GetLogIndex() uint64 {
+	if x != nil {
+		return x.LogIndex
+	}
+	return 0
+}
+
 func (x *RaftLog) GetTerm() uint64 {
 	if x != nil {
 		return x.Term
@@ -459,11 +478,32 @@ func (x *RaftLog) GetTerm() uint64 {
 	return 0
 }
 
-func (x *RaftLog) GetLogIndex() uint64 {
+func (x *RaftLog) GetKey() string {
 	if x != nil {
-		return x.LogIndex
+		return x.Key
+	}
+	return ""
+}
+
+func (x *RaftLog) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *RaftLog) GetCRC() uint32 {
+	if x != nil {
+		return x.CRC
 	}
 	return 0
+}
+
+func (x *RaftLog) GetCommand() Command {
+	if x != nil {
+		return x.Command
+	}
+	return Command_PUT
 }
 
 type AppendEntriesArgs struct {
@@ -813,16 +853,22 @@ const file_serialization_proto_rawDesc = "" +
 	"\x06KVPair\x12\x10\n" +
 	"\x03Key\x18\x01 \x01(\tR\x03Key\x12\x14\n" +
 	"\x05Value\x18\x02 \x01(\tR\x05Value\x12(\n" +
-	"\acommand\x18\x03 \x01(\x0e2\x0e.proto.CommandR\acommand\"}\n" +
-	"\bWALEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x19\n" +
-	"\x05value\x18\x02 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
-	"\x03CRC\x18\x03 \x01(\rR\x03CRC\x12(\n" +
-	"\acommand\x18\x04 \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
-	"\x06_value\"9\n" +
-	"\aRaftLog\x12\x12\n" +
-	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x1a\n" +
-	"\bLogIndex\x18\x02 \x01(\x04R\bLogIndex\"\xd6\x01\n" +
+	"\acommand\x18\x03 \x01(\x0e2\x0e.proto.CommandR\acommand\"\x93\x01\n" +
+	"\bWALEntry\x12\x14\n" +
+	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
+	"\x03CRC\x18\x04 \x01(\rR\x03CRC\x12(\n" +
+	"\acommand\x18\x05 \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
+	"\x06_value\"\xac\x01\n" +
+	"\aRaftLog\x12\x1a\n" +
+	"\bLogIndex\x18\x01 \x01(\x04R\bLogIndex\x12\x12\n" +
+	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
+	"\x05value\x18\x04 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
+	"\x03CRC\x18\x05 \x01(\rR\x03CRC\x12(\n" +
+	"\acommand\x18\x06 \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
+	"\x06_value\"\xd6\x01\n" +
 	"\x11AppendEntriesArgs\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x1a\n" +
 	"\bLeaderID\x18\x02 \x01(\x04R\bLeaderID\x12\"\n" +
@@ -886,12 +932,13 @@ var file_serialization_proto_depIdxs = []int32{
 	0, // 1: proto.LSMEntry.command:type_name -> proto.Command
 	0, // 2: proto.KVPair.command:type_name -> proto.Command
 	0, // 3: proto.WALEntry.command:type_name -> proto.Command
-	5, // 4: proto.AppendEntriesArgs.Entries:type_name -> proto.KVPair
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	0, // 4: proto.RaftLog.command:type_name -> proto.Command
+	5, // 5: proto.AppendEntriesArgs.Entries:type_name -> proto.KVPair
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_serialization_proto_init() }
@@ -901,6 +948,7 @@ func file_serialization_proto_init() {
 	}
 	file_serialization_proto_msgTypes[3].OneofWrappers = []any{}
 	file_serialization_proto_msgTypes[5].OneofWrappers = []any{}
+	file_serialization_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

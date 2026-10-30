@@ -25,8 +25,8 @@ var maxSSTables = map[int]int{
 }
 
 const (
-	SSTableFilePrefix  = "sstable_"
-	maxLevel           = 7
+	SSTableFilePrefix = "sstable_"
+	maxLevel          = 7
 )
 
 type level struct {
@@ -59,10 +59,10 @@ type LSMTree struct {
 
 func Open(dir string, maxMemtableSize int64) (*LSMTree, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	levels := make([]*level, maxLevel)
 	for i := 0; i < maxLevel; i++ {
-		levels[i] = &level{ ssTables: make([]*SSTable, 0) }
+		levels[i] = &level{ssTables: make([]*SSTable, 0)}
 	}
 
 	lsm := &LSMTree{
@@ -331,7 +331,7 @@ func (l *LSMTree) PUT(key string, val []byte) error {
 	defer l.mu.Unlock()
 
 	// if !l.inRecovery {
-	// 	if err := l.wal.WriteEntry(proto.Command_PUT, key, val); err != nil {
+		if err := l.wal.WriteEntry(proto.Command_PUT, key, val, 0, false); err != nil {
 	// 		return err
 	// 	}
 	// }
@@ -404,7 +404,7 @@ func (l *LSMTree) DELETE(key string) error {
 	defer l.mu.Unlock()
 
 	// if !l.inRecovery {
-	// 	if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil); err != nil {
+		if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil, 0, false); err != nil {
 	// 		return err
 	// 	}
 	// }

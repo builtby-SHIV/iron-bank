@@ -171,7 +171,7 @@ func TestWAL(t *testing.T) {
 
 	// Write entries triggering rotation
 	for i := 0; i < 20; i++ {
-		err := wal.WriteEntry(proto.Command_PUT, fmt.Sprintf("k-%03d", i), []byte(fmt.Sprintf("v-%03d", i)))
+		err := wal.WriteEntry(proto.Command_PUT, fmt.Sprintf("k-%03d", i), []byte(fmt.Sprintf("v-%03d", i)), 0, false)
 		if err != nil {
 			t.Fatalf("failed to write wal entry: %v", err)
 		}

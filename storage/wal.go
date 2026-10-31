@@ -153,6 +153,10 @@ func verifyCRC(entry *proto.WALEntry) bool {
 	return entry.CRC == calculateCRC(entry.GetValue(), entry.GetIndex())
 }
 
+func verifyRaftLogCRC(entry *proto.RaftLog) bool {
+	return entry.CRC == calculateCRC(entry.GetValue(), entry.GetIndex())
+}
+
 func (w *WAL) WriteEntry(cmd proto.Command, key string, val []byte, term uint64, raftLog bool) error {
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -212,7 +216,7 @@ func (w *WAL) rotateIfNeeded() error {
 		return err
 	}
 
-	if fileInfo.Size()+int64(w.bufWriter.Buffered()) >= w.maxFileSize {
+	if fileInfo.Size() + int64(w.bufWriter.Buffered()) >= w.maxFileSize {
 		if err := w.rotateLog(); err != nil {
 			return err
 		}
@@ -244,10 +248,6 @@ func (w *WAL) rotateLog() error {
 	}
 
 	return nil
-}
-
-func (w *WAL) roatateLog() error {
-	return w.rotateLog()
 }
 
 func (w *WAL) deleteOldestSegment() error {
@@ -442,12 +442,24 @@ func unmarshalAndVerify(data []byte) (*proto.WALEntry, error) {
 	return &entry, nil
 }
 
+func unmarshalAndVerifyRaftLog(data []byte) (*proto.RaftLog, error) {
+	var entry proto.RaftLog
+	if err := googleproto.Unmarshal(data, &entry); err != nil {
+		return nil, err
+	}
+
+	if !verifyRaftLogCRC(&entry) {
+		return nil, fmt.Errorf("CRC mismatch, data might be corrupted")
+	}
+	return &entry, nil
+}
+
 func (w *WAL) ReadAll() ([]*proto.WALEntry, error) {
 	return w.readAllFromOffset(-1)
 }
 
 func (w *WAL) readAllFromOffset(offset int) ([]*proto.WALEntry, error) {
-	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix+"*"))
+	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix + "*"))
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +468,9 @@ func (w *WAL) readAllFromOffset(offset int) ([]*proto.WALEntry, error) {
 		id   int64
 		path string
 	}
+	
 	var segments []segInfo
+	
 	for _, file := range files {
 		fileName := filepath.Base(file)
 		if !strings.HasPrefix(fileName, segmentPrefix) || strings.HasSuffix(fileName, ".tmp") {
@@ -648,6 +662,102 @@ func (wal *WAL) replaceWithFixedFile(targetFilePath string, entries []*proto.WAL
 	return nil
 }
 
-func (wal *WAL) ReadRaftLog(idx uint64) (error) {
+func (w *WAL) ReadAllRaftLogEntries(file *os.File) ([]*proto.RaftLog, error) {
+	var entries []*proto.RaftLog
+
+	var size int64
+	for {
+		if err := binary.Read(file, binary.LittleEndian, &size); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return entries, err
+		}
+		data := make([]byte, size)
+		if _, err := io.ReadFull(file, data); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return entries, fmt.Errorf("unexpected end of file reading entry")
+			}
+			return entries, err
+		}
+
+		entry, err := unmarshalAndVerifyRaftLog(data)
+		if err != nil {
+			return entries, err
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+func (w *WAL) readAllRaftLogFromOffset(offset int) ([]*proto.RaftLog, error) {
+	files, err := filepath.Glob(filepath.Join(w.directory, segmentPrefix + "*"))
+	if err != nil {
+		return nil, err
+	}
+
+	type segInfo struct {
+		id   int64
+		path string
+	}
 	
+	var segments []segInfo
+	
+	for _, file := range files {
+		fileName := filepath.Base(file)
+		if !strings.HasPrefix(fileName, segmentPrefix) || strings.HasSuffix(fileName, ".tmp") {
+			continue
+		}
+		segmentIndex, err := strconv.ParseInt(strings.TrimPrefix(fileName, segmentPrefix), 10, 64)
+		if err != nil {
+			continue
+		}
+		if segmentIndex < int64(offset) {
+			continue
+		}
+		segments = append(segments, segInfo{id: segmentIndex, path: file})
+	}
+
+	slices.SortFunc(segments, func(a, b segInfo) int {
+		return cmp.Compare(a.id, b.id)
+	})
+
+	var entries []*proto.RaftLog
+
+	for _, seg := range segments {
+		file, err := os.OpenFile(seg.path, os.O_RDONLY, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		entries_from_segment, err := w.ReadAllRaftLogEntries(file)
+		_ = file.Close()
+		if err != nil {
+			return entries, err
+		}
+
+		entries = append(entries, entries_from_segment...)
+	}
+
+	return entries, nil
+}
+
+func (w *WAL) PrevLogTerm(idx uint64) (uint64, error) {
+	entries, err := w.readAllRaftLogFromOffset(-1)
+	if err != nil {
+		return 0, err
+	}
+
+	var prevEntry, currEntry *proto.RaftLog
+
+	for _, entry := range entries {
+		prevEntry = currEntry
+		currEntry = entry
+		if currEntry.Index == idx {
+			break
+		}
+	}
+
+	return prevEntry.Term, nil
 }

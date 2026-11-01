@@ -44,7 +44,7 @@ message WALEntry {
 }
 
 message RaftLog {
-    uint64 LogIndex = 1;
+    uint64 Index = 1;
     uint64 Term = 2;
     string key = 3;
     optional bytes value = 4;
@@ -82,5 +82,5 @@ message RequestVoteReply {
 
 message RaftState {
     uint64 Term = 1;
-    int64 VoteFor = 2;
+    string VotedFor = 2;
 }

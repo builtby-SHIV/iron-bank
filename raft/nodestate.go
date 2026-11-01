@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -313,7 +314,11 @@ func (ns *NodeState) runLeader() Role {
 }
 
 func (ns *NodeState) runFollower() Role {
-	interval := (time.Duration(float64(ns.ID) * 2.5)) * time.Second
+	lastDigit, err := strconv.ParseFloat(ns.tp.TCPAddr[len(ns.tp.TCPAddr) - 1:], 32)
+	if err != nil {
+		fmt.Printf("Error in parsing last digit %v\n", err)
+	}
+	interval := (time.Duration(lastDigit * 2.5)) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -322,10 +327,13 @@ func (ns *NodeState) runFollower() Role {
 		case <-ticker.C:
 			// start election by becoming candidate
 			return RoleCandidate
-		case <-ns.rpcCh:
-		// handle incoming messages
+		case rp := <-ns.replyCh:
+			// handle incoming messages
+			switch rp.msgType {
+				case TypeAppendEntries:
+			}
 		case <-ns.ctx.Done():
-			ns.stop()
+			ns.cancel()
 			return ""
 		}
 	}
@@ -352,16 +360,15 @@ func (ns *NodeState) formatAndSend(entry *proto.KVPair) {
 						break
 					}
 				}
-				
-			args := &proto.AppendEntriesArgs{
-				Term:         ns.RaftState.Term,
-				LeaderID:     ns.ID,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
-				LeaderCommit: ns.CommitIndex,
-				Entries:      []*proto.KVPair{entry},
-			}
-			go ns.tp.sendToAppendEntries(addr, TypeAppendEntries, args, ns.replyCh)
+				args := &proto.AppendEntriesArgs{
+					Term:         ns.RaftState.Term,
+					LeaderID:     ns.ID,
+					PrevLogIndex: prevLogIndex,
+					PrevLogTerm:  prevLogTerm,
+					LeaderCommit: ns.CommitIndex,
+					Entries:      []*proto.KVPair{entry},
+				}
+				go ns.tp.sendToAppendEntries(addr, TypeAppendEntries, args, ns.replyCh)
 			} else {
 				// get prevLogIndex andprevLogTerm from raft log otheriwse send snapshots
 			}

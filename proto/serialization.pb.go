@@ -424,7 +424,7 @@ func (x *WALEntry) GetCommand() Command {
 
 type RaftLog struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LogIndex      uint64                 `protobuf:"varint,1,opt,name=LogIndex,proto3" json:"LogIndex,omitempty"`
+	Index         uint64                 `protobuf:"varint,1,opt,name=Index,proto3" json:"Index,omitempty"`
 	Term          uint64                 `protobuf:"varint,2,opt,name=Term,proto3" json:"Term,omitempty"`
 	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	Value         []byte                 `protobuf:"bytes,4,opt,name=value,proto3,oneof" json:"value,omitempty"`
@@ -464,9 +464,9 @@ func (*RaftLog) Descriptor() ([]byte, []int) {
 	return file_serialization_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *RaftLog) GetLogIndex() uint64 {
+func (x *RaftLog) GetIndex() uint64 {
 	if x != nil {
-		return x.LogIndex
+		return x.Index
 	}
 	return 0
 }
@@ -781,7 +781,7 @@ func (x *RequestVoteReply) GetVoteGranted() bool {
 type RaftState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          uint64                 `protobuf:"varint,1,opt,name=Term,proto3" json:"Term,omitempty"`
-	VoteFor       int64                  `protobuf:"varint,2,opt,name=VoteFor,proto3" json:"VoteFor,omitempty"`
+	VotedFor      string                 `protobuf:"bytes,2,opt,name=VotedFor,proto3" json:"VotedFor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -823,11 +823,11 @@ func (x *RaftState) GetTerm() uint64 {
 	return 0
 }
 
-func (x *RaftState) GetVoteFor() int64 {
+func (x *RaftState) GetVotedFor() string {
 	if x != nil {
-		return x.VoteFor
+		return x.VotedFor
 	}
-	return 0
+	return ""
 }
 
 var File_serialization_proto protoreflect.FileDescriptor
@@ -860,9 +860,9 @@ const file_serialization_proto_rawDesc = "" +
 	"\x05value\x18\x03 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
 	"\x03CRC\x18\x04 \x01(\rR\x03CRC\x12(\n" +
 	"\acommand\x18\x05 \x01(\x0e2\x0e.proto.CommandR\acommandB\b\n" +
-	"\x06_value\"\xac\x01\n" +
-	"\aRaftLog\x12\x1a\n" +
-	"\bLogIndex\x18\x01 \x01(\x04R\bLogIndex\x12\x12\n" +
+	"\x06_value\"\xa6\x01\n" +
+	"\aRaftLog\x12\x14\n" +
+	"\x05Index\x18\x01 \x01(\x04R\x05Index\x12\x12\n" +
 	"\x04Term\x18\x02 \x01(\x04R\x04Term\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12\x19\n" +
 	"\x05value\x18\x04 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x10\n" +
@@ -888,10 +888,10 @@ const file_serialization_proto_rawDesc = "" +
 	"\vLastLogTerm\x18\x04 \x01(\x04R\vLastLogTerm\"H\n" +
 	"\x10RequestVoteReply\x12\x12\n" +
 	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12 \n" +
-	"\vVoteGranted\x18\x02 \x01(\bR\vVoteGranted\"9\n" +
+	"\vVoteGranted\x18\x02 \x01(\bR\vVoteGranted\";\n" +
 	"\tRaftState\x12\x12\n" +
-	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x18\n" +
-	"\aVoteFor\x18\x02 \x01(\x03R\aVoteFor*-\n" +
+	"\x04Term\x18\x01 \x01(\x04R\x04Term\x12\x1a\n" +
+	"\bVotedFor\x18\x02 \x01(\tR\bVotedFor*-\n" +
 	"\aCommand\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +

@@ -30,6 +30,12 @@ type clientCmd struct {
 	key, value string
 }
 
+type appendEntry struct {
+	data	clientCmd
+	index	uint64
+	term	uint64
+}
+
 type LeaderState struct {
 	nextIndex	map[string]uint64
 	matchIndex	map[string]uint64
@@ -49,6 +55,7 @@ type NodeState struct {
 	clientCh    chan clientCmd // client commands
 	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
+	entries		[]*appendEntry
 	RaftState   *proto.RaftState
 	Log         *storage.WAL
 	ctx         context.Context
@@ -98,7 +105,7 @@ func NewNodeState(
 	if raftState == nil {
 		raftState = &proto.RaftState{
 			Term:    0,
-			VoteFor: -1,
+			VotedFor: "",
 		}
 	}
 
@@ -131,10 +138,9 @@ func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 				statePath: statePath,
 				RaftState: &proto.RaftState{
 					Term:    0,
-					VoteFor: -1,
-					Log:     []*proto.RaftLog{},
+					VotedFor: "",
 				},
-				WAL: wal,
+				Log: wal,
 			}
 			if err := ns.Save(); err != nil {
 				return nil, fmt.Errorf("creating %s: %w", statePath, err)
@@ -255,24 +261,8 @@ func (ns *NodeState) runLeader() Role {
 	for {
 		select {
 		case <-ticker.C:
-			args := &proto.AppendEntriesArgs{
-				Term:         ns.RaftState.Term,
-				LeaderID:     ns.ID,
-				PrevLogIndex: ns.Log.CurrSequenceNo - 1,
-				PrevLogTerm:  ns.Log.PrevLogTerm,
-				LeaderCommit: ns.CommitIndex,
-				Entries:      []*proto.KVPair{},
-			}
-
 			ns.tp.mu.RLock()
-			for id, _ := range ns.tp.Peers {
-				if ns.tp.Peers[id].addr != ns.tp.TCPAddr {
-					ns.ls.mu.RLock()
-					ns.ls.inflight[id] = true
-					ns.ls.mu.RUnlock()
-					go ns.tp.sendToAppendEntries(id, TypeAppendEntries, args, ns.replyCh)
-				}
-			}
+			ns.formatAndSend(&proto.KVPair{})
 			ns.tp.mu.RUnlock()
 		case rp := <-ns.replyCh:
 			ns.ls.inflight[rp.peer] = false
@@ -283,8 +273,7 @@ func (ns *NodeState) runLeader() Role {
 				if recv.Term == ns.RaftState.Term {
 					if recv.Success {
 						ns.ls.matchIndex[rp.peer] = max(
-							ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries))
-						)
+							ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries)))
 						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1	
 					} else {
 						idx, args, err := ns.handleBackup(recv.ConflictIndex)
@@ -292,6 +281,7 @@ func (ns *NodeState) runLeader() Role {
 						if err != nil {
 							fmt.Printf("%v\n", err)
 						} else {
+							ns.ls.inflight[rp.peer] = true
 							go ns.tp.sendToAppendEntries(rp.peer, TypeAppendEntries, args, ns.replyCh)
 						}
 					}
@@ -311,24 +301,9 @@ func (ns *NodeState) runLeader() Role {
 				Value:   cmd.value,
 				Command: cmd.command,
 			}
-			args := &proto.AppendEntriesArgs{
-				Term:         ns.RaftState.Term,
-				LeaderID:     ns.ID,
-				PrevLogIndex: ns.Log.CurrSequenceNo - 1,
-				PrevLogTerm:  ns.Log.PrevLogTerm,
-				LeaderCommit: ns.CommitIndex,
-				Entries:      []*proto.KVPair{entry},
-			}
 
 			ns.tp.mu.RLock()
-			for id, _ := range ns.tp.Peers {
-				if ns.tp.Peers[id].addr != ns.tp.TCPAddr {
-					ns.ls.mu.RLock()
-					ns.ls.inflight[id] = true
-					ns.ls.mu.RUnlock()
-					go ns.tp.sendToAppendEntries(id, TypeAppendEntries, args, ns.replyCh)
-				}
-			}
+			ns.formatAndSend(entry)
 			ns.tp.mu.RUnlock()
 		case <-ns.ctx.Done():
 			ns.cancel()
@@ -361,6 +336,37 @@ func (ns *NodeState) runCandidate() Role {
 
 func (ns *NodeState) handleBackup(idx uint64) (uint64, *proto.AppendEntriesArgs, error) {
 	ns.Log.ReadRaftLog(idx, MAX_Entries)
+}
+
+func (ns *NodeState) formatAndSend(entry *proto.KVPair) {
+	for addr, _ := range ns.tp.Peers {
+		if addr != ns.tp.TCPAddr && !ns.ls.inflight[addr]{
+			ns.ls.inflight[addr] = true
+			
+			prevLogIndex := ns.ls.nextIndex[addr] - 1
+			var prevLogTerm uint64
+			if prevLogIndex >= ns.entries[0].index {
+				for _, entry := range ns.entries {
+					if entry.index == prevLogIndex {
+						prevLogTerm = entry.term
+						break
+					}
+				}
+				
+			args := &proto.AppendEntriesArgs{
+				Term:         ns.RaftState.Term,
+				LeaderID:     ns.ID,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				LeaderCommit: ns.CommitIndex,
+				Entries:      []*proto.KVPair{entry},
+			}
+			go ns.tp.sendToAppendEntries(addr, TypeAppendEntries, args, ns.replyCh)
+			} else {
+				// get prevLogIndex andprevLogTerm from raft log otheriwse send snapshots
+			}
+		}
+	}
 }
 
 // func (ns *NodeState) Term() uint64 {

@@ -42,7 +42,6 @@ type TCPTransport struct {
 }
 
 type peerConn struct {
-	addr	string
 	conn	net.Conn
 	mu		sync.RWMutex
 }
@@ -57,10 +56,10 @@ func NewTCPTransport(HTTPAddr, TCPAddr string, ctx context.Context) *TCPTranspor
 	}
 }
 
-func (t *TCPTransport) Add(id, addr string) {
+func (t *TCPTransport) Add(addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.Peers[id] = &peerConn{ addr: addr }
+	t.Peers[addr] = &peerConn{}
 }
 
 func (t *TCPTransport) ListenLoop(addr string, rpCh chan *RPCEvent) {

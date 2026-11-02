@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,21 +21,22 @@ import (
 type Role string
 
 type RPCEvent struct {
-	peer	string
-	msgType byte
-	msgRecv	googleproto.Message
-	msgSent	googleproto.Message
+	peer		string
+	msgType 	byte
+	sendBack	chan googleproto.Message
+	msgRecv		googleproto.Message
+	msgSent		googleproto.Message
+}
+
+type appendEntry struct {
+	data	*proto.KVPair
+	index	uint64
+	term	uint64
 }
 
 type clientCmd struct {
 	command    proto.Command
 	key, value string
-}
-
-type appendEntry struct {
-	data	clientCmd
-	index	uint64
-	term	uint64
 }
 
 type LeaderState struct {
@@ -43,6 +45,10 @@ type LeaderState struct {
 	inflight	map[string]bool
 	pending		map[uint64]chan result // client waiting on log index N
 	mu			sync.RWMutex
+}
+
+type snapShotMetaData struct {
+	lastIncludedTerm, lastIncludedIndex uint64
 }
 
 type NodeState struct {
@@ -59,6 +65,7 @@ type NodeState struct {
 	entries		[]*appendEntry
 	RaftState   *proto.RaftState
 	Log         *storage.WAL
+	ssMetaData	*snapShotMetaData
 	ctx         context.Context
 	cancel      context.CancelFunc
 	mu          sync.RWMutex
@@ -277,8 +284,8 @@ func (ns *NodeState) runLeader() Role {
 							ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries)))
 						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1	
 					} else {
-						idx, args, err := ns.handleBackup(recv.ConflictIndex)
-						ns.ls.nextIndex[rp.peer] = idx
+						_, args, err := ns.handleBackup(recv.ConflictIndex)
+						ns.ls.nextIndex[rp.peer] = recv.ConflictIndex
 						if err != nil {
 							fmt.Printf("%v\n", err)
 						} else {
@@ -302,7 +309,15 @@ func (ns *NodeState) runLeader() Role {
 				Value:   cmd.value,
 				Command: cmd.command,
 			}
-
+			
+			ns.ls.nextIndex[ns.tp.TCPAddr] += 1
+			ns.ls.matchIndex[ns.tp.TCPAddr] += 1
+			ns.entries = append(ns.entries, &appendEntry{ 
+				data: entry, 
+				term: ns.RaftState.Term, 
+				index: ns.ls.matchIndex[ns.tp.TCPAddr],
+			})
+			
 			ns.tp.mu.RLock()
 			ns.formatAndSend(entry)
 			ns.tp.mu.RUnlock()
@@ -331,6 +346,33 @@ func (ns *NodeState) runFollower() Role {
 			// handle incoming messages
 			switch rp.msgType {
 				case TypeAppendEntries:
+				recv := (rp.msgRecv).(*proto.AppendEntriesArgs)
+				
+				if recv.Term < ns.RaftState.Term {
+					reply := &proto.AppendEntriesReply{
+						Term: ns.RaftState.Term,
+						ConflictIndex: 0,
+						ConflictTerm: 0,
+						Success: false,
+					}
+				} else if recv.Term > ns.RaftState.Term {
+					// remember to change config file
+					ticker.Reset(interval)
+					ns.RaftState.Term = recv.Term
+					reply, err := ns.handleAppendEntries(recv)
+					if err != nil {
+						fmt.Printf("Error in handling appendentriesargs %v\n", err)
+						break
+					}
+				} else {
+					ticker.Reset(interval)
+					reply, err := ns.handleAppendEntries(recv)
+					if err != nil {
+						fmt.Printf("Error in handling appendentriesargs %v\n", err)
+						break
+					}
+				}
+
 			}
 		case <-ns.ctx.Done():
 			ns.cancel()
@@ -376,224 +418,98 @@ func (ns *NodeState) formatAndSend(entry *proto.KVPair) {
 	}
 }
 
-// func (ns *NodeState) Term() uint64 {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	if ns.RaftState != nil {
-// 		return ns.RaftState.Term
-// 	}
-// 	return 0
-// }
+func (ns *NodeState) handleAppendEntries(recv *proto.AppendEntriesArgs) (*proto.AppendEntriesReply, error) {
+	var reply *proto.AppendEntriesReply
+	if ns.ssMetaData.lastIncludedIndex == recv.PrevLogIndex {
+		// add to raft Log
+		for idx, entry := range recv.Entries {
+			ns.entries = append(ns.entries, &appendEntry{ 
+				data: entry, 
+				index: recv.PrevLogIndex + uint64(idx) + 1, 
+				term: recv.Term, 
+			})
+		}
 
-// func (ns *NodeState) VoteFor() int64 {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	if ns.RaftState != nil {
-// 		return ns.RaftState.VoteFor
-// 	}
-// 	return -1
-// }
+		reply = &proto.AppendEntriesReply{
+			Term: ns.RaftState.Term,
+			ConflictIndex: 0,
+			ConflictTerm: 0,
+			Success: true,
+		}
+	} else if ns.ssMetaData.lastIncludedIndex < recv.PrevLogIndex {
+		// the leader's next index for this node is too far back so it should've sent a snapshot instead
+		reply = &proto.AppendEntriesReply{
+			Term: ns.RaftState.Term,
+			ConflictIndex: ns.ssMetaData.lastIncludedIndex + 1,
+			ConflictTerm: 0,
+			Success: false,
+		}
+	} else {
+		sliceIdx := recv.PrevLogIndex - ns.ssMetaData.lastIncludedIndex - 1
+		if ns.entries[sliceIdx].index == recv.PrevLogIndex {
+			// add to raft Log
+			for idx, entry := range recv.Entries {
+				ns.entries = append(ns.entries, &appendEntry{ 
+					data: entry, 
+					index: recv.PrevLogIndex + uint64(idx) + 1, 
+					term: recv.Term,
+				})
+			}
+	
+			reply = &proto.AppendEntriesReply{
+				Term: ns.RaftState.Term,
+				ConflictIndex: 0,
+				ConflictTerm: 0,
+				Success: true,
+			}
+		} else if ns.entries[sliceIdx].index < recv.PrevLogIndex {
+			reply = &proto.AppendEntriesReply{
+				Term: ns.RaftState.Term,
+				ConflictIndex: ns.entries[sliceIdx].index + 1,
+				ConflictTerm: 0,
+				Success: false,
+			}
+		} else {
+			if ns.entries[sliceIdx].term != recv.PrevLogTerm {
+				ns.Log.TruncateAfterIdx(sliceIdx)
+				ns.entries = slices.Delete(ns.entries, int(sliceIdx), len(ns.entries))
+				// add to raft Log
+				for idx, entry := range recv.Entries {
+					ns.entries = append(ns.entries, &appendEntry{ 
+						data: entry, 
+						index: recv.PrevLogIndex + uint64(idx) + 1, 
+						term: recv.Term,
+					})
+				}
+			} else {
+				for idx, entry := range recv.Entries {
+			        targetIndex := recv.PrevLogIndex + uint64(idx) + 1
+			        localSliceIdx := targetIndex - ns.ssMetaData.lastIncludedIndex - 1
+			        
+			        if localSliceIdx < uint64(len(ns.entries)) {
+			            if ns.entries[localSliceIdx].term != recv.Term {
+			                ns.Log.TruncateAfterIdx(localSliceIdx)
+			                ns.entries = slices.Delete(ns.entries, int(localSliceIdx), len(ns.entries))
+			                
+			                ns.entries = append(ns.entries, &appendEntry{
+			                    data:  entry,
+			                    index: targetIndex,
+			                    term:  recv.Term,
+			                })
+			            } else {
+			                continue
+			            }
+			        } else {
+			            ns.entries = append(ns.entries, &appendEntry{
+			                data:  entry,
+			                index: targetIndex,
+			                term:  recv.Term,
+			            })
+			        }
+			    }
+			}
+		}
+	}
 
-// func (ns *NodeState) Log() [] *proto.RaftLog {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	if ns.RaftState != nil {
-// 		return ns.RaftState.Log
-// 	}
-// 	return [] *proto.RaftLog{}
-// }
-
-// func (ns *NodeState) Snapshot() NodeState {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	var rs *proto.RaftState
-// 	if ns.RaftState != nil {
-// 		rs = &proto.RaftState{
-// 			Term:    ns.RaftState.Term,
-// 			VoteFor: ns.RaftState.VoteFor,
-// 		}
-// 	} else {
-// 		rs = &proto.RaftState{
-// 			Term:    0,
-// 			VoteFor: -1,
-// 		}
-// 	}
-// 	return NodeState{
-// 		ID:        ns.ID,
-// 		HTTPAddr:  ns.HTTPAddr,
-// 		TCPAddr:   ns.TCPAddr,
-// 		Role:      ns.Role,
-// 		statePath: ns.statePath,
-// 		RaftState: rs,
-// 	}
-// }
-
-// func (ns *NodeState) NodeID() uint64 {
-// 	return ns.ID
-// }
-
-// func (ns *NodeState) CurrentTerm() uint64 {
-// 	return ns.Term()
-// }
-
-// func (ns *NodeState) GetRole() string {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	return ns.Role
-// }
-
-// func (ns *NodeState) LastLogIndex() uint64 {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	if ns.WAL != nil {
-// 		if entry, err := ns.WAL.GetLastEntryInLog(); err == nil && entry != nil {
-// 			return entry.Index
-// 		}
-// 	}
-// 	if ns.RaftState != nil && len(ns.RaftState.Log) > 0 {
-// 		return ns.RaftState.Log[len(ns.RaftState.Log)-1].Index
-// 	}
-// 	return 0
-// }
-
-// func (ns *NodeState) LastLogTerm() uint64 {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-// 	if ns.WAL != nil {
-// 		if entry, err := ns.WAL.GetLastEntryInLog(); err == nil && entry != nil {
-// 			return entry.Term
-// 		}
-// 	}
-// 	if ns.RaftState != nil && len(ns.RaftState.Log) > 0 {
-// 		return ns.RaftState.Log[len(ns.RaftState.Log)-1].Term
-// 	}
-// 	return 0
-// }
-
-// // CommitIndex returns the leader's known committed log index.
-// // func (ns *NodeState) CommitIndex() uint64 {
-// // 	return 0
-// // }
-
-// func (ns *NodeState) GetLogEntries(nextIndex uint64) (uint64, uint64, []*proto.RaftLog, uint64) {
-// 	ns.mu.RLock()
-// 	defer ns.mu.RUnlock()
-
-// 	prevIndex := nextIndex - 1
-// 	prevTerm := uint64(0)
-// 	var entries []*proto.RaftLog
-
-// 	if ns.RaftState != nil {
-// 		for _, entry := range ns.RaftState.Log {
-// 			if entry.Index == prevIndex {
-// 				prevTerm = entry.Term
-// 			}
-// 			if entry.Index >= nextIndex {
-// 				entries = append(entries, entry)
-// 			}
-// 		}
-// 	}
-
-// 	return prevIndex, prevTerm, entries, 0
-// }
-
-// func (ns *NodeState) HandleAppendEntries(
-// args *proto.AppendEntriesArgs) *proto.AppendEntriesReply {
-// 	ns.mu.Lock()
-// 	defer ns.mu.Unlock()
-
-// 	currentTerm := uint64(0)
-// 	if ns.RaftState != nil {
-// 		currentTerm = ns.RaftState.Term
-// 	}
-
-// 	if args.Term < currentTerm {
-// 		return &proto.AppendEntriesReply{
-// 			Term:    currentTerm,
-// 			Success: false,
-// 		}
-// 	}
-
-// 	if args.Term > currentTerm {
-// 		ns.Role = RoleFollower
-// 		if ns.RaftState != nil {
-// 			ns.RaftState.Term = args.Term
-// 			ns.RaftState.VoteFor = -1
-// 		}
-// 		_ = ns.Save()
-// 	}
-
-// 	return &proto.AppendEntriesReply{
-// 		Term:    args.Term,
-// 		Success: true,
-// 	}
-// }
-
-// func (ns *NodeState) HandleRequestVote(args *proto.RequestVoteArgs) *proto.RequestVoteReply {
-// 	ns.mu.Lock()
-// 	defer ns.mu.Unlock()
-
-// 	currentTerm := uint64(0)
-// 	if ns.RaftState != nil {
-// 		currentTerm = ns.RaftState.Term
-// 	}
-
-// 	if args.Term < currentTerm {
-// 		return &proto.RequestVoteReply{
-// 			Term:        currentTerm,
-// 			VoteGranted: false,
-// 		}
-// 	}
-
-// 	if args.Term > currentTerm {
-// 		ns.Role = RoleFollower
-// 		if ns.RaftState != nil {
-// 			ns.RaftState.Term = args.Term
-// 			ns.RaftState.VoteFor = -1
-// 		}
-// 		_ = ns.Save()
-// 	}
-
-// 	voteGranted := false
-// 	if ns.RaftState != nil && (ns.RaftState.VoteFor == -1 || ns.RaftState.VoteFor == int64(args.CandidateID)) {
-// 		ns.RaftState.VoteFor = int64(args.CandidateID)
-// 		voteGranted = true
-// 		_ = ns.Save()
-// 	}
-
-// 	return &proto.RequestVoteReply{
-// 		Term:        args.Term,
-// 		VoteGranted: voteGranted,
-// 	}
-// }
-
-// func (ns *NodeState) BecomeFollower(term uint64) {
-// 	ns.mu.Lock()
-// 	ns.Role = RoleFollower
-// 	if ns.RaftState != nil && term > ns.RaftState.Term {
-// 		ns.RaftState.Term = term
-// 		ns.RaftState.VoteFor = -1
-// 	}
-// 	ns.mu.Unlock()
-// 	_ = ns.Save()
-// }
-
-// func (ns *NodeState) BecomeCandidate() {
-// 	ns.mu.Lock()
-// 	ns.Role = "candidate"
-// 	if ns.RaftState != nil {
-// 		ns.RaftState.Term++
-// 		ns.RaftState.VoteFor = int64(ns.ID)
-// 	}
-// 	ns.mu.Unlock()
-// 	_ = ns.Save()
-// }
-
-// // var _ RaftHooks = (*NodeState)(nil)
-
-// func (ns *NodeState) BecomeLeader() {
-// 	ns.mu.Lock()
-// 	ns.Role = RoleLeader
-// 	ns.mu.Unlock()
-// 	_ = ns.Save()
-// }
+	return reply, nil
+}

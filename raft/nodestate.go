@@ -23,8 +23,13 @@ type Role string
 type RPCEvent struct {
 	peer		string
 	msgType 	byte
-	sendBack	chan googleproto.Message
+	sendBack	chan *SendBack
 	msgRecv		googleproto.Message
+	msgSent		googleproto.Message
+}
+
+type SendBack struct {
+	msgType 	byte
 	msgSent		googleproto.Message
 }
 
@@ -369,6 +374,7 @@ func (ns *NodeState) runFollower() Role {
 						ConflictTerm: 0,
 						Success: false,
 					}
+					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
 				} else if recv.Term > ns.RaftState.Term {
 					// remember to change config file
 					ticker.Reset(interval)
@@ -378,7 +384,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
-					rp.sendBack<- reply
+					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
 				} else {
 					ticker.Reset(interval)
 					reply, err := ns.handleAppendEntries(recv)
@@ -386,7 +392,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
-					rp.sendBack<- reply
+					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
 				}
 
 			}

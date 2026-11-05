@@ -108,13 +108,20 @@ func handleIncoming(conn net.Conn, ctx context.Context, rpCh chan *RPCEvent) {
 		err		error
 	)
 
-	if msgType, msg, err = DecodeMessage(conn); err != nil {
+	if msgType, msg, err = DecodeAndReadMessage(conn); err != nil {
 		fmt.Printf("Error in reading the incoming message %v\n", err)
 		return
 	}
 
+	sendBack := make(chan *SendBack)
+
 	select {
-		case rpCh<- &RPCEvent{ msgType: msgType, msg: msg }:
+		case rpCh<- &RPCEvent{ msgType: msgType, msgRecv: msg, sendBack: sendBack }:
+		case data := <-sendBack:
+		if err := EncodeAndWriteMessage(conn, data.msgType, data.msgSent); err != nil {
+			fmt.Printf("Error in encoding the message %v\n", err)
+			return
+		}
 		case <-ctx.Done():
 		return
 	}
@@ -205,11 +212,6 @@ func (t *TCPTransport) AppendEntries(
 		conn net.Conn
 		err error
 	)
-	
-	encodedMsg, err := EncodeMessage(TypeAppendEntries, args)
-	if err != nil {
-		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in encoding the message %w", err)
-	}
 
 	if peer.conn == nil {
 		backoff := 50 * time.Millisecond
@@ -234,15 +236,11 @@ func (t *TCPTransport) AppendEntries(
 		peer.mu.Unlock()
 	}
 
-	w := bufio.NewWriter(peer.conn)
-	if _, err := w.Write(encodedMsg); err != nil {
-		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in writing the message to buffer %w", err)
-	}
-	if err := w.Flush(); err != nil {
-		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in flushing the message from buffer %w", err)
+	if err := EncodeAndWriteMessage(peer.conn, TypeAppendEntries, args); err != nil {
+		return &proto.AppendEntriesReply{}, err
 	}
 
-	_, decodedMsg, err := DecodeMessage(peer.conn)
+	_, decodedMsg, err := DecodeAndReadMessage(peer.conn)
 	if err != nil {
 		return &proto.AppendEntriesReply{}, fmt.Errorf("Error in decoding the message %w", err)
 	}

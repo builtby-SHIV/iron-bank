@@ -282,7 +282,21 @@ func (ns *NodeState) runLeader() Role {
 					if recv.Success {
 						ns.ls.matchIndex[rp.peer] = max(
 							ns.ls.matchIndex[rp.peer], sent.PrevLogIndex + uint64(len(sent.Entries)))
-						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1	
+						ns.ls.nextIndex[rp.peer] = ns.ls.matchIndex[rp.peer] + 1
+						if ns.CommitIndex < ns.ls.matchIndex[ns.tp.TCPAddr] {
+							var higherIdx, count uint64
+							for _, idx := range ns.ls.matchIndex {
+								if idx > higherIdx {
+									higherIdx = idx
+									count = 1
+								} else {
+									count += 1
+								}
+							}
+							if count > uint64(len(ns.ls.matchIndex) / 2) {
+								ns.CommitIndex += 1
+							}
+						}
 					} else {
 						_, args, err := ns.handleBackup(recv.ConflictIndex)
 						ns.ls.nextIndex[rp.peer] = recv.ConflictIndex
@@ -364,6 +378,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
+					rp.sendBack<- reply
 				} else {
 					ticker.Reset(interval)
 					reply, err := ns.handleAppendEntries(recv)
@@ -371,6 +386,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
+					rp.sendBack<- reply
 				}
 
 			}
@@ -510,6 +526,7 @@ func (ns *NodeState) handleAppendEntries(recv *proto.AppendEntriesArgs) (*proto.
 			}
 		}
 	}
-
+	
+	ns.CommitIndex = min(ns.CommitIndex, recv.LeaderCommit)
 	return reply, nil
 }

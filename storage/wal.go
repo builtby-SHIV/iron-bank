@@ -545,7 +545,7 @@ func (wal *WAL) keepSyncing() {
 	}
 }
 
-func (wal *WAL) Repair() ([]*proto.WALEntry, error) {
+func (wal *WAL) Repair(idx uint64) ([]*proto.WALEntry, error) {
 	wal.lock.Lock()
 	defer wal.lock.Unlock()
 
@@ -572,7 +572,7 @@ func (wal *WAL) Repair() ([]*proto.WALEntry, error) {
 		return nil, err
 	}
 
-	var entries []*proto.LogEntry
+	var entries []*proto.WALEntry
 	needsRepair := false
 
 	for {
@@ -591,7 +591,7 @@ func (wal *WAL) Repair() ([]*proto.WALEntry, error) {
 			break
 		}
 
-		var entry proto.LogEntry
+		var entry proto.WALEntry
 		if err := googleproto.Unmarshal(data, &entry); err != nil {
 			needsRepair = true
 			break
@@ -602,6 +602,10 @@ func (wal *WAL) Repair() ([]*proto.WALEntry, error) {
 			break
 		}
 
+		if entry.Index == idx {
+			needsRepair = true
+			break
+		}
 		entries = append(entries, &entry)
 	}
 	_ = file.Close()
@@ -743,21 +747,17 @@ func (w *WAL) readAllRaftLogFromOffset(offset int) ([]*proto.RaftLog, error) {
 	return entries, nil
 }
 
-func (w *WAL) PrevLogTerm(idx uint64) (uint64, error) {
+func (w *WAL) RaftLogTerm(idx uint64) (uint64, error) {
 	entries, err := w.readAllRaftLogFromOffset(-1)
 	if err != nil {
 		return 0, err
 	}
 
-	var prevEntry, currEntry *proto.RaftLog
-
 	for _, entry := range entries {
-		prevEntry = currEntry
-		currEntry = entry
-		if currEntry.Index == idx {
-			break
+		if entry.Index == idx {
+			return entry.Term, nil
 		}
 	}
 
-	return prevEntry.Term, nil
+	return 0, nil
 }

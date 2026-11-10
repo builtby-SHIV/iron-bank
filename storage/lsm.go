@@ -331,7 +331,7 @@ func (l *LSMTree) PUT(key string, val []byte) error {
 	defer l.mu.Unlock()
 
 	// if !l.inRecovery {
-		if err := l.wal.WriteEntry(proto.Command_PUT, key, val, 0, false); err != nil {
+	// 	if err := l.wal.WriteEntry(proto.Command_PUT, key, val, 0, false); err != nil {
 	// 		return err
 	// 	}
 	// }
@@ -404,7 +404,7 @@ func (l *LSMTree) DELETE(key string) error {
 	defer l.mu.Unlock()
 
 	// if !l.inRecovery {
-		if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil, 0, false); err != nil {
+	// 	if err := l.wal.WriteEntry(proto.Command_DELETE, key, nil, 0, false); err != nil {
 	// 		return err
 	// 	}
 	// }

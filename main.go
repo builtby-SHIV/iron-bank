@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"iron-bank/proto"
+	"iron-bank/raft"
 	"iron-bank/storage"
 )
 
@@ -26,21 +28,6 @@ const (
 	RoleObserver = "observer"
 	RoleUnknown  = "unknown"
 )
-
-func parseRole(s string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "leader":
-		return RoleLeader, nil
-	case "follower":
-		return RoleFollower, nil
-	case "observer":
-		return RoleObserver, nil
-	case "unknown", "":
-		return RoleUnknown, nil
-	default:
-		return RoleUnknown, fmt.Errorf("unknown role %q: must be one of leader, follower, observer", s)
-	}
-}
 
 type Response struct {
 	Message string
@@ -57,6 +44,7 @@ type NonAddRequest struct {
 
 type Server struct {
 	lsm *storage.LSMTree
+	ns  *raft.NodeState
 }
 
 type ServerConfig struct {
@@ -68,19 +56,20 @@ type ServerConfig struct {
 	Peers    string
 }
 
-type ProcessConfig = storage.ProcessConfig
-
-var (
-	LoadOrInitProcessConfig         = storage.LoadOrInitProcessConfig
-	GetProcessConfig                = storage.GetProcessConfig
-	OverwriteProcessConfig          = storage.OverwriteProcessConfig
-	AccessAndOverwriteProcessConfig = storage.AccessAndOverwriteProcessConfig
-	GetConfigPath                   = storage.GetConfigPath
-	GetConfig                       = storage.GetConfig
-	OverwriteConfig                 = storage.OverwriteConfig
-	AccessAndOverwriteConfig        = storage.AccessAndOverwriteConfig
-	LoadConfig                      = storage.LoadConfig
-)
+func parseRole(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "leader":
+		return RoleLeader, nil
+	case "follower":
+		return RoleFollower, nil
+	case "observer":
+		return RoleObserver, nil
+	case "unknown", "":
+		return RoleUnknown, nil
+	default:
+		return RoleUnknown, fmt.Errorf("unknown role %q: must be one of leader, follower, observer", s)
+	}
+}
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 	var req AddRequest
@@ -88,10 +77,13 @@ func (s *Server) add(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.lsm.PUT(req.Key, []byte(req.Val)); err != nil {
+
+	if err := s.ns.Log.WriteEntry(proto.Command_PUT, req.Key, []byte(req.Val), s.ns.RaftState.Term); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.ns.ClientCh<- &raft.ClientCmd{ Command: proto.Command_PUT, Key: req.Key, Value: req.Val }
+	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(Response{Message: "Key-Val pair created"})
@@ -299,13 +291,13 @@ func main() {
 		log.Fatalf("[startup] create data dir %s: %v", cfg.DataDir, err)
 	}
 
-	procCfg, err := LoadOrInitProcessConfig(cfg.DataDir, *httpFlag, *tcpFlag, cfg.Role)
+	procCfg, err := storage.LoadOrInitProcessConfig(cfg.DataDir, *httpFlag, *tcpFlag)
 	if err != nil {
 		log.Fatalf("[startup] load or init process config: %v", err)
 	}
 
 	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  term=%d  votedFor=%d  data=%s",
-		cfg.NodeID, procCfg.Role, cfg.HTTPAddr, cfg.TCPAddr, procCfg.CurrentTerm, procCfg.VotedFor, cfg.DataDir)
+		cfg.NodeID, cfg.Role, cfg.HTTPAddr, cfg.TCPAddr, procCfg.CurrentTerm, procCfg.VotedFor, cfg.DataDir)
 
 	walDir := filepath.Join(cfg.DataDir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {

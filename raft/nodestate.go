@@ -39,9 +39,9 @@ type appendEntry struct {
 	term	uint64
 }
 
-type clientCmd struct {
-	command    proto.Command
-	key, value string
+type ClientCmd struct {
+	Command    proto.Command
+	Key, Value string
 }
 
 type LeaderState struct {
@@ -64,7 +64,7 @@ type NodeState struct {
 	tp          TCPTransport
 	ls			*LeaderState
 	replyCh     chan *RPCEvent // incoming requests from the forwarders
-	clientCh    chan clientCmd // client commands
+	ClientCh    chan *ClientCmd // client commands
 	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
 	cfgDir		string

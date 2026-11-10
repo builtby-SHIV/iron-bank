@@ -67,6 +67,7 @@ type NodeState struct {
 	clientCh    chan clientCmd // client commands
 	applyCh     chan []*proto.RaftLog
 	stopCh      chan struct{}
+	cfgDir		string
 	entries		[]*appendEntry
 	RaftState   *proto.RaftState
 	Log         *storage.WAL
@@ -317,6 +318,18 @@ func (ns *NodeState) runLeader() Role {
 				} else if recv.Term > ns.RaftState.Term {
 					// stale leader; depose to a follower
 					// persist raft state to config file
+					cfg, err := storage.GetProcessConfig(ns.cfgDir)
+					if err != nil {
+						fmt.Printf("Error in accessing data in config file %v\n", err)
+						ns.tp.cancel()
+					}
+					cfg.Role = string(RoleFollower)
+					cfg.CurrentTerm = recv.Term
+					if err := storage.OverwriteProcessConfig(ns.cfgDir, cfg); err != nil {
+						fmt.Printf("Error in overwriting data in config file %v\n", err)
+						ns.tp.cancel()
+					}
+					
 					ns.tp.cancel()
 					ns.Role = RoleFollower
 					ns.RaftState.Term = recv.Term
@@ -376,9 +389,19 @@ func (ns *NodeState) runFollower() Role {
 						ConflictTerm: 0,
 						Success: false,
 					}
-					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
+					rp.sendBack<- &SendBack{ msgType: TypeAppendEntriesReply, msgSent: reply }
 				} else if recv.Term > ns.RaftState.Term {
-					// remember to change config file
+					cfg, err := storage.GetProcessConfig(ns.cfgDir)
+					if err != nil {
+						fmt.Printf("Error in accessing data in config file %v\n", err)
+						ns.tp.cancel()
+					}
+					cfg.CurrentTerm = recv.Term
+					if err := storage.OverwriteProcessConfig(ns.cfgDir, cfg); err != nil {
+						fmt.Printf("Error in overwriting data in config file %v\n", err)
+						ns.tp.cancel()
+					}
+					
 					ticker.Reset(interval)
 					ns.RaftState.Term = recv.Term
 					reply, err := ns.handleAppendEntries(recv)
@@ -386,7 +409,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
-					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
+					rp.sendBack<- &SendBack{ msgType: TypeAppendEntriesReply, msgSent: reply }
 				} else {
 					ticker.Reset(interval)
 					reply, err := ns.handleAppendEntries(recv)
@@ -394,7 +417,7 @@ func (ns *NodeState) runFollower() Role {
 						fmt.Printf("Error in handling appendentriesargs %v\n", err)
 						break
 					}
-					rp.sendBack<- &SendBack{msgType: TypeAppendEntriesReply, msgSent: reply }
+					rp.sendBack<- &SendBack{ msgType: TypeAppendEntriesReply, msgSent: reply }
 				}
 
 			}

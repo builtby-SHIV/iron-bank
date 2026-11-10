@@ -11,33 +11,52 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"iron-bank/cluster"
 	"iron-bank/storage"
 )
 
+const (
+	RoleLeader   = "leader"
+	RoleFollower = "follower"
+	RoleObserver = "observer"
+	RoleUnknown  = "unknown"
+)
+
+func parseRole(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "leader":
+		return RoleLeader, nil
+	case "follower":
+		return RoleFollower, nil
+	case "observer":
+		return RoleObserver, nil
+	case "unknown", "":
+		return RoleUnknown, nil
+	default:
+		return RoleUnknown, fmt.Errorf("unknown role %q: must be one of leader, follower, observer", s)
+	}
+}
+
 type Response struct {
-	Message string 
+	Message string
 }
 
 type AddRequest struct {
-	Key string 
-	Val string 
+	Key string
+	Val string
 }
 
 type NonAddRequest struct {
-	Key string 
+	Key string
 }
 
 type Server struct {
-	lsm          *storage.LSMTree
-	term         uint64
-	votedFor     int64
-	prevLogIndex uint64
+	lsm *storage.LSMTree
 }
 
 type ServerConfig struct {
@@ -47,6 +66,196 @@ type ServerConfig struct {
 	DataDir  string
 	Role     string
 	Peers    string
+}
+
+type ProcessConfig struct {
+	Role        string 
+	HTTPPort    int    
+	TCPPort     int    
+	CurrentTerm uint64 
+	VotedFor    int64  
+}
+
+func (p *ProcessConfig) UnmarshalJSON(data []byte) error {
+	type Alias struct {
+		Role        any 
+		HTTPPort    any 
+		TCPPort     any 
+		CurrentTerm any 
+		VotedFor    any 
+	}
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	toInt := func(val any) (int, error) {
+		if val == nil {
+			return 0, nil
+		}
+		switch v := val.(type) {
+		case float64:
+			return int(v), nil
+		case string:
+			s := strings.TrimSpace(v)
+			if s == "" {
+				return 0, nil
+			}
+			return parsePort(s)
+		default:
+			return 0, fmt.Errorf("unexpected type for port: %T", val)
+		}
+	}
+
+	toUint64 := func(val any) (uint64, error) {
+		if val == nil {
+			return 0, nil
+		}
+		switch v := val.(type) {
+		case float64:
+			return uint64(v), nil
+		case string:
+			return strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		default:
+			return 0, fmt.Errorf("unexpected type for term: %T", val)
+		}
+	}
+
+	toInt64 := func(val any) (int64, error) {
+		if val == nil {
+			return 0, nil
+		}
+		switch v := val.(type) {
+		case float64:
+			return int64(v), nil
+		case string:
+			return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		default:
+			return 0, fmt.Errorf("unexpected type for voted_for: %T", val)
+		}
+	}
+
+	httpP, err := toInt(aux.HTTPPort)
+	if err != nil {
+		return err
+	}
+	tcpP, err := toInt(aux.TCPPort)
+	if err != nil {
+		return err
+	}
+	term, err := toUint64(aux.CurrentTerm)
+	if err != nil {
+		return err
+	}
+	vf, err := toInt64(aux.VotedFor)
+	if err != nil {
+		return err
+	}
+
+	role := ""
+	if aux.Role != nil {
+		if s, ok := aux.Role.(string); ok {
+			role = strings.TrimSpace(s)
+		} else {
+			role = fmt.Sprintf("%v", aux.Role)
+		}
+	}
+
+	p.Role = role
+	p.HTTPPort = httpP
+	p.TCPPort = tcpP
+	p.CurrentTerm = term
+	p.VotedFor = vf
+	return nil
+}
+
+func GetConfigPath(baseDir string) string {
+	if strings.HasSuffix(baseDir, ".json") {
+		return baseDir
+	}
+	target := filepath.Join(baseDir, "config", "config.json")
+	if _, err := os.Stat(target); err == nil {
+		return target
+	}
+	fallback := filepath.Join(baseDir, "config.json")
+	if _, err := os.Stat(fallback); err == nil {
+		return fallback
+	}
+	return target
+}
+
+func GetProcessConfig(baseDir string) (*ProcessConfig, error) {
+	configPath := GetConfigPath(baseDir)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var cfg ProcessConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config file %s: %w", configPath, err)
+	}
+	return &cfg, nil
+}
+
+func OverwriteProcessConfig(baseDir string, cfg *ProcessConfig) error {
+	if cfg == nil {
+		return errors.New("cannot overwrite config with nil")
+	}
+	configPath := GetConfigPath(baseDir)
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("creating config dir %s: %w", configDir, err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := configPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("writing config file %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, configPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("committing config file %s: %w", configPath, err)
+	}
+	return nil
+}
+
+func LoadOrInitProcessConfig(baseDir, httpFlag, tcpFlag string, roleFlag ...string) (*ProcessConfig, error) {
+	configPath := GetConfigPath(baseDir)
+	if _, err := os.Stat(configPath); err == nil {
+		return GetProcessConfig(baseDir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	httpPort, err := parsePort(httpFlag)
+	if err != nil {
+		return nil, fmt.Errorf("parsing http port from flag %q: %w", httpFlag, err)
+	}
+
+	tcpPort, err := parsePort(tcpFlag)
+	if err != nil {
+		return nil, fmt.Errorf("parsing tcp port from flag %q: %w", tcpFlag, err)
+	}
+
+	role := ""
+	if len(roleFlag) > 0 {
+		role = strings.TrimSpace(roleFlag[0])
+	}
+
+	cfg := &ProcessConfig{
+		Role:        role,
+		HTTPPort:    httpPort,
+		TCPPort:     tcpPort,
+		CurrentTerm: 0,
+		VotedFor:    -1,
+	}
+
+	if err := OverwriteProcessConfig(baseDir, cfg); err != nil {
+		return nil, fmt.Errorf("creating config file: %w", err)
+	}
+	return cfg, nil
 }
 
 func (s *Server) add(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +351,29 @@ func extractPort(addr string) (string, error) {
 	return port, err
 }
 
-func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag string) (*ServerConfig, error) {
+func parsePort(addr string) (int, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return 0, nil
+	}
+	portStr, err := extractPort(addr)
+	if err != nil {
+		return 0, err
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, err
+	}
+	return p, nil
+}
+
+func resolveConfig(
+	idFlag,
+	httpFlag,
+	tcpFlag,
+	roleFlag,
+	dataDirFlag,
+	peersFlag string) (*ServerConfig, error) {
 	if strings.TrimSpace(idFlag) == "" {
 		return nil, errors.New("--id is required")
 	}
@@ -170,11 +401,11 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag s
 	if strings.TrimSpace(roleFlag) == "" {
 		return nil, errors.New("--role is required")
 	}
-	role, err := cluster.ParseRole(roleFlag)
+	role, err := parseRole(roleFlag)
 	if err != nil {
 		return nil, fmt.Errorf("invalid --role=%q: %w", roleFlag, err)
 	}
-	if role == cluster.RoleUnknown {
+	if role == RoleUnknown {
 		return nil, fmt.Errorf("invalid --role=%q: must be one of leader, follower, observer", roleFlag)
 	}
 
@@ -198,7 +429,6 @@ func resolveConfig(idFlag, httpFlag, tcpFlag, roleFlag, dataDirFlag, peersFlag s
 	}, nil
 }
 
-// parsePeersList returns a list of target peer TCP addresses, excluding selfTCP.
 func parsePeersList(raw string, selfTCP string) []string {
 	var candidates []string
 	if strings.TrimSpace(raw) != "" {
@@ -214,7 +444,7 @@ func parsePeersList(raw string, selfTCP string) []string {
 			}
 		}
 	} else {
-		candidates = []string{":7001", ":7002", ":7003"}
+		candidates = []string{":7001", ":7002", ":7003", ":7004", ":7005"}
 	}
 
 	normSelf, _, _ := normalizeAddr(selfTCP)
@@ -228,12 +458,12 @@ func parsePeersList(raw string, selfTCP string) []string {
 }
 
 func main() {
-	idFlag := flag.String("id", "", "Node identifier (required, uint64)")
-	httpFlag := flag.String("http", "", "HTTP listen address (required)")
-	tcpFlag := flag.String("tcp", "", "TCP listen address (required)")
-	roleFlag := flag.String("role", "", "Node role: leader | follower | observer (required)")
-	dataDirFlag := flag.String("data", "", "Storage directory (required)")
-	peersFlag := flag.String("peers", "", "List of peer TCP addresses (required)")
+	idFlag := flag.String("id", "", "Node identifier")
+	httpFlag := flag.String("http", "", "HTTP listen address")
+	tcpFlag := flag.String("tcp", "", "TCP listen address")
+	roleFlag := flag.String("role", "", "Node role: leader | follower | observer")
+	dataDirFlag := flag.String("data", "", "Storage directory")
+	peersFlag := flag.String("peers", "", "List of peer TCP addresses")
 	flag.Parse()
 
 	cfg, err := resolveConfig(*idFlag, *httpFlag, *tcpFlag, *roleFlag, *dataDirFlag, *peersFlag)
@@ -245,69 +475,44 @@ func main() {
 		log.Fatalf("[startup] create data dir %s: %v", cfg.DataDir, err)
 	}
 
-	ns, err := cluster.LoadOrInitNodeState(cfg.DataDir)
+	procCfg, err := LoadOrInitProcessConfig(cfg.DataDir, *httpFlag, *tcpFlag, cfg.Role)
 	if err != nil {
-		log.Fatalf("[startup] load node state: %v", err)
+		log.Fatalf("[startup] load or init process config: %v", err)
 	}
-	ns.MergeFlags(cfg.NodeID, cfg.HTTPAddr, cfg.TCPAddr, cfg.Role)
 
-	snap := ns.Snapshot()
 	log.Printf("[node] id=%d  role=%s  http=%s  tcp=%s  term=%d  votedFor=%d  data=%s",
-		snap.ID, snap.Role, snap.HTTPAddr, snap.TCPAddr, snap.RaftState.Term, snap.RaftState.VoteFor, cfg.DataDir)
+		cfg.NodeID, procCfg.Role, cfg.HTTPAddr, cfg.TCPAddr, procCfg.CurrentTerm, procCfg.VotedFor, cfg.DataDir)
 
-	lsm, err := storage.Open(cfg.DataDir, 4096)
+	walDir := filepath.Join(cfg.DataDir, "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		log.Fatalf("[startup] create wal dir %s: %v", walDir, err)
+	}
+	wal, err := storage.OpenWAL(walDir, true, 128000, 1000)
 	if err != nil {
-		log.Fatalf("[startup] open LSM at %s: %v", cfg.DataDir, err)
+		log.Fatalf("[startup] open WAL at %s: %v", walDir, err)
+	}
+	defer wal.Close()
+
+	sstableDir := filepath.Join(cfg.DataDir, "sstable")
+	if err := os.MkdirAll(sstableDir, 0755); err != nil {
+		log.Fatalf("[startup] create sstable dir %s: %v", sstableDir, err)
+	}
+	lsm, err := storage.Open(sstableDir, 4096)
+	if err != nil {
+		log.Fatalf("[startup] open LSM at %s: %v", sstableDir, err)
 	}
 	defer lsm.Close()
-
-	tcpLn, err := net.Listen("tcp", snap.TCPAddr)
-	if err != nil {
-		log.Fatalf("[startup] listen TCP %s: %v", snap.TCPAddr, err)
-	}
-	defer tcpLn.Close()
-	log.Printf("[tcp] listening on %s", snap.TCPAddr)
-
-	entry, err := ns.WAL.GetLastEntryInLog()
-	if err != nil {
-		//handle this later on
-	}
-
-	peerMap := cluster.NewPeerMap()
-	selfInfo := cluster.PeerInfo{
-		ID:       snap.ID,
-		HTTPAddr: snap.HTTPAddr,
-		TCPAddr:  snap.TCPAddr,
-		Role:     snap.Role,
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// ── TCP Accept Loop: receive incoming peer connections & announcements ──
-	go func() {
-		for {
-			conn, err := tcpLn.Accept()
-			if err != nil {
-				return // listener closed during shutdown
-			}
-			go peerMap.HandleTCPConnection(conn, selfInfo)
-		}
-	}()
-
-	targets := parsePeersList(*peersFlag, snap.TCPAddr)
-	peerMap.BroadcastAnnouncement(targets, ns, ctx)
+	_ = parsePeersList(*peersFlag, cfg.TCPAddr)
 
 	var httpServer *http.Server
 
-	if snap.HTTPAddr != "" {
+	if cfg.HTTPAddr != "" {
 		srv := &Server{
-			lsm:      lsm,
-			term:     snap.RaftState.Term,
-			votedFor: snap.RaftState.VoteFor,
-		}
-		if entry != nil {
-			srv.prevLogIndex = entry.Index
+			lsm: lsm,
 		}
 		mux := http.NewServeMux()
 
@@ -315,31 +520,13 @@ func main() {
 		mux.HandleFunc("GET /get", srv.get)
 		mux.HandleFunc("DELETE /del", srv.delete)
 
-		// Node introspection
-		mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
-			s := ns.Snapshot()
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":    s.ID,
-				"role":  s.Role,
-				"http":  s.HTTPAddr,
-				"tcp":   s.TCPAddr,
-				"peers": peerMap.Snapshot(),
-			})
-		})
-
-		mux.HandleFunc("GET /peers", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(peerMap.Snapshot())
-		})
-
-		httpServer = &http.Server{Addr: snap.HTTPAddr, Handler: mux}
+		httpServer = &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("[http] %v", err)
 			}
 		}()
-		log.Printf("[http] listening on %s", snap.HTTPAddr)
+		log.Printf("[http] listening on %s", cfg.HTTPAddr)
 	}
 
 	<-ctx.Done()

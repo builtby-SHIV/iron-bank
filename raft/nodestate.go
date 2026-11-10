@@ -109,7 +109,8 @@ func NewNodeState(
 	role Role,
 	ctx context.Context,
 	raftState *proto.RaftState) *NodeState {
-	wal, err := storage.OpenWAL(dir+WALDirectorySuffix, true, 128000, 1000)
+	walDir := filepath.Join(dir, "wal")
+	wal, err := storage.OpenWAL(walDir, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil
@@ -136,7 +137,8 @@ func NewNodeState(
 func LoadOrInitNodeState(dataDir string) (*NodeState, error) {
 	// _, cancel := context.WithCancel(context.Background())
 
-	wal, err := storage.OpenWAL(dataDir+WALDirectorySuffix, true, 128000, 1000)
+	walDir := filepath.Join(dataDir, "wal")
+	wal, err := storage.OpenWAL(walDir, true, 128000, 1000)
 	if err != nil {
 		// cancel()
 		return nil, err
@@ -403,12 +405,12 @@ func (ns *NodeState) runFollower() Role {
 	}
 }
 
-func (ns *NodeState) runCandidate() Role {
-}
+// func (ns *NodeState) runCandidate() Role {
+// }
 
-func (ns *NodeState) handleBackup(idx uint64) (uint64, *proto.AppendEntriesArgs, error) {
-	ns.Log.ReadRaftLog(idx, MAX_Entries)
-}
+// func (ns *NodeState) handleBackup(idx uint64) (uint64, *proto.AppendEntriesArgs, error) {
+// 	ns.Log.ReadRaftLog(idx, MAX_Entries)
+// }
 
 func (ns *NodeState) formatAndSend(entry *proto.KVPair) {
 	for addr, _ := range ns.tp.Peers {
@@ -493,7 +495,7 @@ func (ns *NodeState) handleAppendEntries(recv *proto.AppendEntriesArgs) (*proto.
 			}
 		} else {
 			if ns.entries[sliceIdx].term != recv.PrevLogTerm {
-				ns.Log.TruncateAfterIdx(sliceIdx)
+				ns.Log.Repair(sliceIdx)
 				ns.entries = slices.Delete(ns.entries, int(sliceIdx), len(ns.entries))
 				// add to raft Log
 				for idx, entry := range recv.Entries {
@@ -510,7 +512,7 @@ func (ns *NodeState) handleAppendEntries(recv *proto.AppendEntriesArgs) (*proto.
 			        
 			        if localSliceIdx < uint64(len(ns.entries)) {
 			            if ns.entries[localSliceIdx].term != recv.Term {
-			                ns.Log.TruncateAfterIdx(localSliceIdx)
+			                ns.Log.Repair(localSliceIdx)
 			                ns.entries = slices.Delete(ns.entries, int(localSliceIdx), len(ns.entries))
 			                
 			                ns.entries = append(ns.entries, &appendEntry{
